@@ -1,26 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
-import { prisma } from "@/lib/prisma";
-
-type DeckWithRelations = {
-  id: string;
-  title: string;
-  subject: string;
-  updatedAt: Date;
-  cards: { id: string; isDraft: boolean }[];
-  studySessions: {
-    completedAt: Date | null;
-    correctCount: number;
-    totalCards: number;
-  }[];
-};
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { buttonVariants } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { Separator } from "@/components/ui/separator";
-import { PlusCircle, BookOpen, Clock, BarChart2 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Mascot } from "@/components/mascot";
+import { PlusCircle } from "lucide-react";
 import { DecksClientWrapper } from "./_components/decks-client-wrapper";
 
 export default async function DecksPage() {
@@ -31,42 +15,62 @@ export default async function DecksPage() {
 
   if (!authUser) redirect("/auth/login");
 
-  const decks = await prisma.deck.findMany({
-    where: { ownerId: authUser.id },
-    orderBy: { updatedAt: "desc" },
-    include: {
-      cards: { select: { id: true, isDraft: true } },
-      studySessions: {
-        where: { completedAt: { not: null } },
-        orderBy: { completedAt: "desc" },
-        take: 1,
-        select: { completedAt: true, correctCount: true, totalCards: true },
-      },
-    },
-  });
+  const { data: decks } = await supabase
+    .from("decks")
+    .select(`
+      id,
+      title,
+      subject,
+      updated_at,
+      cards(id, is_draft),
+      study_sessions(completed_at, correct_count, total_cards)
+    `)
+    .eq("owner_id", authUser.id)
+    .order("updated_at", { ascending: false });
 
-  const typedDecks = decks as unknown as DeckWithRelations[];
-  const subjects: string[] = Array.from(new Set(typedDecks.map((d) => d.subject))).sort();
+  const deckList = decks ?? [];
 
-  const deckData = typedDecks.map((deck) => {
-    const publishedCount = deck.cards.filter((c) => !c.isDraft).length;
-    const lastSession = deck.studySessions[0] ?? null;
-    const mastery =
-      lastSession && lastSession.totalCards > 0
-        ? Math.round((lastSession.correctCount / lastSession.totalCards) * 100)
-        : null;
+  const subjects: string[] = Array.from(
+    new Set(deckList.map((d: { subject: string }) => d.subject))
+  ).sort() as string[];
 
-    return {
-      id: deck.id,
-      title: deck.title,
-      subject: deck.subject,
-      cardCount: publishedCount,
-      draftCount: deck.cards.filter((c) => c.isDraft).length,
-      updatedAt: deck.updatedAt.toISOString(),
-      lastStudied: lastSession?.completedAt?.toISOString() ?? null,
-      mastery,
-    };
-  });
+  const deckData = deckList.map(
+    (deck: {
+      id: string;
+      title: string;
+      subject: string;
+      updated_at: string;
+      cards: { id: string; is_draft: boolean }[];
+      study_sessions: { completed_at: string | null; correct_count: number; total_cards: number }[];
+    }) => {
+      const publishedCount = (deck.cards ?? []).filter((c) => !c.is_draft).length;
+      const draftCount = (deck.cards ?? []).filter((c) => c.is_draft).length;
+
+      const completedSessions = (deck.study_sessions ?? [])
+        .filter((s) => s.completed_at !== null)
+        .sort(
+          (a, b) =>
+            new Date(b.completed_at!).getTime() - new Date(a.completed_at!).getTime()
+        );
+      const lastSession = completedSessions[0] ?? null;
+
+      const mastery =
+        lastSession && lastSession.total_cards > 0
+          ? Math.round((lastSession.correct_count / lastSession.total_cards) * 100)
+          : null;
+
+      return {
+        id: deck.id,
+        title: deck.title,
+        subject: deck.subject,
+        cardCount: publishedCount,
+        draftCount,
+        updatedAt: deck.updated_at,
+        lastStudied: lastSession?.completed_at ?? null,
+        mastery,
+      };
+    }
+  );
 
   return (
     <div className="space-y-6">
@@ -74,7 +78,7 @@ export default async function DecksPage() {
         <div>
           <h1 className="text-2xl font-bold">Deck Library</h1>
           <p className="text-muted-foreground">
-            {decks.length} {decks.length === 1 ? "deck" : "decks"}
+            {deckList.length} {deckList.length === 1 ? "deck" : "decks"}
           </p>
         </div>
         <Link href="/decks/new" className={buttonVariants()}>
@@ -85,13 +89,13 @@ export default async function DecksPage() {
 
       <Separator />
 
-      {decks.length === 0 ? (
+      {deckList.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 gap-4 text-center">
-          <BookOpen className="h-16 w-16 text-muted-foreground/40" />
+          <Mascot expression="sad" size={96} />
           <div>
             <h2 className="text-xl font-semibold">No decks yet</h2>
             <p className="text-muted-foreground mt-1">
-              Create your first deck to start studying
+              Lil&apos; Bit is waiting for your first deck!
             </p>
           </div>
           <Link href="/decks/new" className={buttonVariants({ size: "lg" })}>

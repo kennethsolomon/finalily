@@ -1,11 +1,10 @@
 import { createClient } from "@/lib/supabase/server";
-import { prisma } from "@/lib/prisma";
 import { redirect } from "next/navigation";
-import Link from "next/link";
-import Image from "next/image";
+import Link from "next/link"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { Progress } from "@/components/ui/progress";
+import { Mascot, type MascotExpression } from "@/components/mascot";
 import { Flame, BookOpen, PlusCircle, Target, Brain, AlertCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -15,69 +14,104 @@ export default async function DashboardPage() {
 
   if (!authUser) redirect("/auth/login");
 
-  const user = await prisma.user.findUnique({
-    where: { id: authUser.id },
-  });
+  const { data: user } = await supabase
+    .from("users")
+    .select("*")
+    .eq("id", authUser.id)
+    .single();
 
   if (!user) redirect("/auth/login");
 
   const prefs = user.preferences as Record<string, unknown>;
   if (!prefs?.subjects) redirect("/onboarding");
 
-  const [dueCards, recentSession, weekSessions, totalDecks, weakCards, mistakeCount] =
-    await Promise.all([
-      prisma.reviewSchedule.count({
-        where: { userId: user.id, nextReviewAt: { lte: new Date() } },
-      }),
-      prisma.studySession.findFirst({
-        where: { userId: user.id, completedAt: { not: null } },
-        orderBy: { completedAt: "desc" },
-        include: { deck: { select: { id: true, title: true } } },
-      }),
-      prisma.studySession.count({
-        where: {
-          userId: user.id,
-          completedAt: { not: null },
-          createdAt: {
-            gte: new Date(new Date().setDate(new Date().getDate() - new Date().getDay())),
-          },
-        },
-      }),
-      prisma.deck.count({ where: { ownerId: user.id } }),
-      prisma.reviewSchedule.count({
-        where: { userId: user.id, easeFactor: { lt: 2.0 } },
-      }),
-      prisma.sessionAnswer.count({
-        where: {
-          isCorrect: false,
-          session: { userId: user.id },
-          createdAt: { gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
-        },
-      }),
-    ]);
+  const now = new Date().toISOString();
+  const ws = new Date();
+  ws.setDate(ws.getDate() - ws.getDay());
+  ws.setHours(0, 0, 0, 0);
+  const weekStart = ws.toISOString();
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const goalProgress = Math.min(100, Math.round((weekSessions / user.weeklyGoal) * 100));
+  const [
+    { count: dueCards },
+    { data: recentSessionRows },
+    { count: weekSessions },
+    { count: totalDecks },
+    { count: weakCards },
+    { count: mistakeCount },
+  ] = await Promise.all([
+    supabase
+      .from("review_schedules")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .lte("next_review_at", now),
+    supabase
+      .from("study_sessions")
+      .select("id, completed_at, deck_id, decks(id, title)")
+      .eq("user_id", user.id)
+      .not("completed_at", "is", null)
+      .order("completed_at", { ascending: false })
+      .limit(1),
+    supabase
+      .from("study_sessions")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .not("completed_at", "is", null)
+      .gte("created_at", weekStart),
+    supabase
+      .from("decks")
+      .select("*", { count: "exact", head: true })
+      .eq("owner_id", user.id),
+    supabase
+      .from("review_schedules")
+      .select("*", { count: "exact", head: true })
+      .eq("user_id", user.id)
+      .lt("ease_factor", 2.0),
+    supabase
+      .from("session_answers")
+      .select("id, study_sessions!inner(user_id)", { count: "exact", head: true })
+      .eq("is_correct", false)
+      .eq("study_sessions.user_id", user.id)
+      .gte("created_at", sevenDaysAgo),
+  ]);
+
+  const recentSession = recentSessionRows?.[0] ?? null;
+  const recentDeck = (recentSession?.decks as unknown as { id: string; title: string }) ?? null;
+
+  const goalProgress = Math.min(
+    100,
+    Math.round(((weekSessions ?? 0) / (user.weekly_goal ?? 5)) * 100)
+  );
+
+  // Contextual mascot expression
+  const streak = user.streak_count ?? 0;
+  const due = dueCards ?? 0;
+  let mascotExpression: MascotExpression = "happy";
+  if (due === 0 && (totalDecks ?? 0) === 0) mascotExpression = "sleeping";
+  else if (due === 0) mascotExpression = "smug";
+  else if (streak >= 7) mascotExpression = "surprised";
+  else if (due > 20) mascotExpression = "sad";
 
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Image src="/logo.png" alt="FinaLily" width={40} height={40} className="rounded-lg md:hidden" />
+          <Mascot expression={mascotExpression} size={56} className="shrink-0" />
           <div>
-            <h1 className="text-2xl font-bold">Welcome back, {user.displayName || "Student"}</h1>
+            <h1 className="text-2xl font-bold">Welcome back, {user.display_name || "Student"}</h1>
             <p className="text-muted-foreground">
-              {dueCards > 0 ? `You have ${dueCards} cards to review` : "You're all caught up!"}
+              {due > 0 ? `You have ${due} cards to review` : "You're all caught up!"}
             </p>
           </div>
         </div>
         <div className="flex items-center gap-2">
           <Flame className="h-5 w-5 text-orange-500" />
-          <span className="text-lg font-bold">{user.streakCount}</span>
+          <span className="text-lg font-bold">{streak}</span>
         </div>
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {dueCards > 0 && (
+        {(dueCards ?? 0) > 0 && (
           <Card className="border-primary/50 bg-primary/5">
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -95,21 +129,21 @@ export default async function DashboardPage() {
           </Card>
         )}
 
-        {recentSession && (
+        {recentSession && recentDeck && (
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium">Continue Studying</CardTitle>
             </CardHeader>
             <CardContent>
-              <p className="font-medium">{recentSession.deck.title}</p>
+              <p className="font-medium">{recentDeck.title}</p>
               <p className="text-xs text-muted-foreground mb-3">
                 Last studied{" "}
-                {recentSession.completedAt
-                  ? new Date(recentSession.completedAt).toLocaleDateString()
+                {recentSession.completed_at
+                  ? new Date(recentSession.completed_at).toLocaleDateString()
                   : "recently"}
               </p>
               <Link
-                href={`/decks/${recentSession.deck.id}/study?mode=learn`}
+                href={`/decks/${recentDeck.id}/study?mode=learn`}
                 className={cn(buttonVariants({ variant: "outline", size: "sm" }), "w-full")}
               >
                 Continue
@@ -126,12 +160,12 @@ export default async function DashboardPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-lg font-bold">{weekSessions}/{user.weeklyGoal} sessions</p>
+            <p className="text-lg font-bold">{weekSessions ?? 0}/{user.weekly_goal ?? 5} sessions</p>
             <Progress value={goalProgress} className="mt-2" />
           </CardContent>
         </Card>
 
-        {weakCards > 0 && (
+        {(weakCards ?? 0) > 0 && (
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -149,7 +183,7 @@ export default async function DashboardPage() {
           </Card>
         )}
 
-        {mistakeCount > 0 && (
+        {(mistakeCount ?? 0) > 0 && (
           <Card>
             <CardHeader className="pb-2">
               <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -173,7 +207,7 @@ export default async function DashboardPage() {
           <PlusCircle className="h-4 w-4 mr-2" />
           Create Deck
         </Link>
-        {totalDecks === 0 && (
+        {(totalDecks ?? 0) === 0 && (
           <p className="text-sm text-muted-foreground self-center">
             Create your first deck to get started!
           </p>
@@ -182,19 +216,19 @@ export default async function DashboardPage() {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="text-center">
-          <p className="text-2xl font-bold">{totalDecks}</p>
+          <p className="text-2xl font-bold">{totalDecks ?? 0}</p>
           <p className="text-xs text-muted-foreground">Decks</p>
         </div>
         <div className="text-center">
-          <p className="text-2xl font-bold">{user.streakCount}</p>
+          <p className="text-2xl font-bold">{user.streak_count ?? 0}</p>
           <p className="text-xs text-muted-foreground">Day Streak</p>
         </div>
         <div className="text-center">
-          <p className="text-2xl font-bold">{weekSessions}</p>
+          <p className="text-2xl font-bold">{weekSessions ?? 0}</p>
           <p className="text-xs text-muted-foreground">This Week</p>
         </div>
         <div className="text-center">
-          <p className="text-2xl font-bold">{dueCards}</p>
+          <p className="text-2xl font-bold">{dueCards ?? 0}</p>
           <p className="text-xs text-muted-foreground">Due Today</p>
         </div>
       </div>

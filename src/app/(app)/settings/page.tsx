@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { createClient } from "@/lib/supabase/client";
 import { updateProfile } from "@/actions/profile";
+import { ThemePicker } from "@/components/theme-picker";
 import {
   FlaskConical,
   Atom,
@@ -57,9 +58,9 @@ export default function SettingsPage() {
       const { getProfile } = await import("@/actions/profile");
       const profile = await getProfile();
       if (profile) {
-        setDisplayName(profile.displayName ?? "");
-        setWeeklyGoal(profile.weeklyGoal ?? 5);
-        const prefs = (profile.preferences as Record<string, unknown>) ?? {};
+        setDisplayName((profile as Record<string, unknown>).display_name as string ?? "");
+        setWeeklyGoal((profile as Record<string, unknown>).weekly_goal as number ?? 5);
+        const prefs = ((profile as Record<string, unknown>).preferences as Record<string, unknown>) ?? {};
         setSelectedSubjects((prefs.subjects as string[]) ?? []);
       }
     }
@@ -132,6 +133,16 @@ export default function SettingsPage() {
             onChange={(e) => setDisplayName(e.target.value)}
             placeholder="Your name"
           />
+        </div>
+      </section>
+
+      {/* Appearance */}
+      <section className="space-y-4">
+        <h2 className="text-base font-medium">Appearance</h2>
+        <Separator />
+        <div>
+          <Label className="mb-2 block">Theme</Label>
+          <ThemePicker />
         </div>
       </section>
 

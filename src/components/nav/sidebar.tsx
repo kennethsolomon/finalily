@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
+import { Mascot } from "@/components/mascot";
 import { Home, Library, PlusCircle, User, Flame } from "lucide-react";
 
 const navItems = [
@@ -50,6 +51,7 @@ export function Sidebar() {
 
       <div className="px-6 py-4 border-t">
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <Mascot expression="winking" size={28} className="shrink-0" />
           <Flame className="h-4 w-4 text-orange-500" />
           <span>Study streak</span>
         </div>
