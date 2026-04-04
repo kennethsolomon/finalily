@@ -32,14 +32,7 @@ export default async function DashboardPage() {
   const weekStart = ws.toISOString();
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-  const [
-    { count: dueCards },
-    { data: recentSessionRows },
-    { count: weekSessions },
-    { count: totalDecks },
-    { count: weakCards },
-    { count: mistakeCount },
-  ] = await Promise.all([
+  const results = await Promise.allSettled([
     supabase
       .from("review_schedules")
       .select("*", { count: "exact", head: true })
@@ -74,6 +67,13 @@ export default async function DashboardPage() {
       .eq("study_sessions.user_id", user.id)
       .gte("created_at", sevenDaysAgo),
   ]);
+
+  const dueCards = results[0].status === "fulfilled" ? results[0].value.count : 0;
+  const recentSessionRows = results[1].status === "fulfilled" ? results[1].value.data : null;
+  const weekSessions = results[2].status === "fulfilled" ? results[2].value.count : 0;
+  const totalDecks = results[3].status === "fulfilled" ? results[3].value.count : 0;
+  const weakCards = results[4].status === "fulfilled" ? results[4].value.count : 0;
+  const mistakeCount = results[5].status === "fulfilled" ? results[5].value.count : 0;
 
   const recentSession = recentSessionRows?.[0] ?? null;
   const recentDeck = (recentSession?.decks as unknown as { id: string; title: string }) ?? null;
@@ -229,17 +229,17 @@ export default async function DashboardPage() {
         </Card>
       </div>
 
-      <div className="flex flex-wrap gap-3">
-        <Link href="/decks/new" className={buttonVariants()}>
-          <PlusCircle className="h-4 w-4 mr-2" />
-          Create Deck
-        </Link>
-        {(totalDecks ?? 0) === 0 && (
+      {(totalDecks ?? 0) === 0 && (
+        <div className="flex flex-wrap gap-3">
+          <Link href="/decks/new" className={buttonVariants()}>
+            <PlusCircle className="h-4 w-4 mr-2" />
+            Create Deck
+          </Link>
           <p className="text-sm text-muted-foreground self-center">
             Create your first deck to get started!
           </p>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

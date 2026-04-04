@@ -1,5 +1,4 @@
 import { createClient } from "@/lib/supabase/server";
-import { prisma } from "@/lib/prisma";
 
 type CardRow = {
   id: string;
@@ -7,14 +6,14 @@ type CardRow = {
   prompt: string;
   answer: string;
   explanation: string | null;
-  isDraft: boolean;
+  is_draft: boolean;
   position: number;
 };
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { buttonVariants } from "@/components/ui/button";
+import { buttonVariants } from "@/components/ui/button-variants";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import {
   BookOpen,
@@ -57,18 +56,19 @@ export default async function DeckDetailPage({
 
   if (!authUser) redirect("/auth/login");
 
-  const deck = await prisma.deck.findUnique({
-    where: { id },
-    include: {
-      cards: { orderBy: { position: "asc" } },
-    },
-  });
+  const { data: deck, error: deckError } = await supabase
+    .from("decks")
+    .select("*, cards(*)")
+    .eq("id", id)
+    .single();
 
-  if (!deck || deck.ownerId !== authUser.id) redirect("/decks");
+  if (deckError || !deck || deck.owner_id !== authUser.id) redirect("/decks");
 
-  const cards: CardRow[] = deck.cards as CardRow[];
-  const publishedCards = cards.filter((c) => !c.isDraft);
-  const draftCards = cards.filter((c) => c.isDraft);
+  const cards: CardRow[] = ((deck.cards as CardRow[]) ?? []).sort(
+    (a, b) => a.position - b.position
+  );
+  const publishedCards = cards.filter((c) => !c.is_draft);
+  const draftCards = cards.filter((c) => c.is_draft);
 
   // Health check: duplicate prompts, short answers (<10 chars), missing explanations
   const prompts = publishedCards.map((c) => c.prompt.toLowerCase().trim());
@@ -88,7 +88,7 @@ export default async function DeckDetailPage({
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
             <Badge variant="secondary">{deck.subject}</Badge>
-            {deck.isShared && (
+            {deck.is_shared && (
               <Badge variant="outline" className="text-xs">
                 <Share2 className="h-3 w-3 mr-1" />
                 Shared
@@ -104,7 +104,7 @@ export default async function DeckDetailPage({
         <div className="flex items-center gap-2 shrink-0">
           {publishedCards.length > 0 && (
             <Link
-              href={`/decks/${id}/study`}
+              href={`/decks/${id}/study?mode=learn&filter=all`}
               className={cn(buttonVariants(), "gap-2")}
             >
               <Play className="h-4 w-4" />
@@ -143,7 +143,7 @@ export default async function DeckDetailPage({
         </Card>
         <Card
           className={cn(
-            healthIssues > 0 && "border-amber-300 bg-amber-50"
+            healthIssues > 0 && "border-amber-500/50 bg-amber-500/10"
           )}
         >
           <CardContent className="pt-4">
@@ -154,19 +154,26 @@ export default async function DeckDetailPage({
               {healthIssues}
             </p>
             <p className="text-xs text-muted-foreground">Health Issues</p>
+            {healthIssues > 0 && (
+              <div className="mt-2 space-y-0.5 text-xs text-amber-600 dark:text-amber-400">
+                {duplicateCount > 0 && <p>{duplicateCount} duplicate prompts</p>}
+                {shortAnswerCount > 0 && <p>{shortAnswerCount} short answers</p>}
+                {missingExplanationCount > 0 && <p>{missingExplanationCount} missing explanations</p>}
+              </div>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {draftCards.length > 0 && (
-        <div className="flex items-center gap-3 p-4 rounded-lg border border-amber-200 bg-amber-50">
-          <Sparkles className="h-5 w-5 text-amber-600 shrink-0" />
+      {draftCards.length > 0 && (deck.source_type === "TOPIC" || deck.source_type === "PDF") && (
+        <div className="flex items-center gap-3 p-4 rounded-lg border border-amber-500/30 bg-amber-500/10">
+          <Sparkles className="h-5 w-5 text-amber-500 shrink-0" />
           <div className="flex-1 min-w-0">
-            <p className="font-medium text-amber-800">
+            <p className="font-medium text-amber-600 dark:text-amber-400">
               {draftCards.length} AI-generated{" "}
               {draftCards.length === 1 ? "card" : "cards"} awaiting review
             </p>
-            <p className="text-sm text-amber-700">
+            <p className="text-sm text-amber-600/80 dark:text-amber-400/80">
               Review and publish them to add to your deck.
             </p>
           </div>
@@ -174,7 +181,7 @@ export default async function DeckDetailPage({
             href={`/decks/${id}/review`}
             className={cn(
               buttonVariants({ variant: "outline", size: "sm" }),
-              "shrink-0 border-amber-400 text-amber-800 hover:bg-amber-100"
+              "shrink-0 border-amber-500/40 text-amber-600 dark:text-amber-400 hover:bg-amber-500/10"
             )}
           >
             Review AI Cards
@@ -186,7 +193,7 @@ export default async function DeckDetailPage({
 
       <div>
         <h2 className="text-lg font-semibold mb-3">
-          Cards ({deck.cards.length})
+          Cards ({cards.length})
         </h2>
         {cards.length === 0 ? (
           <div className="text-center py-12 text-muted-foreground">
@@ -200,7 +207,7 @@ export default async function DeckDetailPage({
                 key={card.id}
                 className={cn(
                   "flex items-start gap-3 p-3 rounded-lg border bg-card",
-                  card.isDraft && "border-dashed border-amber-300 bg-amber-50/40"
+                  card.is_draft && "border-dashed border-amber-500/30 bg-amber-500/5"
                 )}
               >
                 <span className="text-xs text-muted-foreground mt-0.5 w-5 shrink-0">
@@ -216,13 +223,13 @@ export default async function DeckDetailPage({
                 </span>
                 <p className="flex-1 text-sm line-clamp-2">{card.prompt}</p>
                 <Badge
-                  variant={card.isDraft ? "outline" : "secondary"}
+                  variant={card.is_draft ? "outline" : "secondary"}
                   className={cn(
                     "shrink-0 text-xs",
-                    card.isDraft && "border-amber-400 text-amber-700"
+                    card.is_draft && "border-amber-500/40 text-amber-600 dark:text-amber-400"
                   )}
                 >
-                  {card.isDraft ? "Draft" : "Published"}
+                  {card.is_draft ? "Draft" : "Published"}
                 </Badge>
               </div>
             ))}

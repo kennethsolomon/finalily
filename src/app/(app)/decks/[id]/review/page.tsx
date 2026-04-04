@@ -5,8 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
+
+
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
@@ -112,18 +112,13 @@ export default function ReviewPage() {
 
   function advance(removedId?: string) {
     setEditing(false);
-    setCards((prev) => {
-      const next = removedId ? prev.filter((c) => c.id !== removedId) : prev;
-      return next;
-    });
     if (removedId) {
       setReviewedIds((prev) => new Set([...prev, removedId]));
     }
-    setCurrentIndex((prev) => {
-      const newLen = removedId
-        ? cards.length - 1
-        : cards.length;
-      return Math.min(prev, Math.max(0, newLen - 1));
+    setCards((prev) => {
+      const next = removedId ? prev.filter((c) => c.id !== removedId) : prev;
+      setCurrentIndex((prevIdx) => Math.min(prevIdx, Math.max(0, next.length - 1)));
+      return next;
     });
   }
 
