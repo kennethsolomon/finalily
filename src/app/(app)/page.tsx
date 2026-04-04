@@ -202,6 +202,33 @@ export default async function DashboardPage() {
         )}
       </div>
 
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <Card className="text-center">
+          <CardContent className="pt-4 pb-3">
+            <p className="text-2xl font-bold">{totalDecks ?? 0}</p>
+            <p className="text-xs text-muted-foreground">Decks</p>
+          </CardContent>
+        </Card>
+        <Card className="text-center">
+          <CardContent className="pt-4 pb-3">
+            <p className="text-2xl font-bold">{streak}</p>
+            <p className="text-xs text-muted-foreground">Day Streak</p>
+          </CardContent>
+        </Card>
+        <Card className="text-center">
+          <CardContent className="pt-4 pb-3">
+            <p className="text-2xl font-bold">{weekSessions ?? 0}</p>
+            <p className="text-xs text-muted-foreground">This Week</p>
+          </CardContent>
+        </Card>
+        <Card className="text-center">
+          <CardContent className="pt-4 pb-3">
+            <p className="text-2xl font-bold">{due}</p>
+            <p className="text-xs text-muted-foreground">Due Today</p>
+          </CardContent>
+        </Card>
+      </div>
+
       <div className="flex flex-wrap gap-3">
         <Link href="/decks/new" className={buttonVariants()}>
           <PlusCircle className="h-4 w-4 mr-2" />
@@ -212,25 +239,6 @@ export default async function DashboardPage() {
             Create your first deck to get started!
           </p>
         )}
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="text-center">
-          <p className="text-2xl font-bold">{totalDecks ?? 0}</p>
-          <p className="text-xs text-muted-foreground">Decks</p>
-        </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold">{user.streak_count ?? 0}</p>
-          <p className="text-xs text-muted-foreground">Day Streak</p>
-        </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold">{weekSessions ?? 0}</p>
-          <p className="text-xs text-muted-foreground">This Week</p>
-        </div>
-        <div className="text-center">
-          <p className="text-2xl font-bold">{dueCards ?? 0}</p>
-          <p className="text-xs text-muted-foreground">Due Today</p>
-        </div>
       </div>
     </div>
   );

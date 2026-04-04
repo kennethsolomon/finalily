@@ -36,7 +36,7 @@ export function Mascot({
   return (
     <div
       className={cn(
-        "relative inline-block",
+        "relative inline-block overflow-hidden rounded-2xl bg-white/80 shadow-sm",
         animate && "motion-safe:animate-mascot-idle",
         className
       )}
@@ -46,7 +46,7 @@ export function Mascot({
         alt={ALT_TEXT[expression]}
         width={size}
         height={size}
-        className="object-contain drop-shadow-sm"
+        className="object-contain"
         priority={size >= 80}
       />
     </div>
