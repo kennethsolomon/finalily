@@ -161,65 +161,123 @@ function SortableCardItem({
     >
       {editingCardId === card.id ? (
         <div className="space-y-3">
-          <div className="space-y-1">
-            <Label className="text-xs">Prompt</Label>
-            <Textarea
-              value={editPrompt}
-              onChange={(e) => setEditPrompt(e.target.value)}
-              rows={2}
-            />
-          </div>
-          {card.type === "MCQ" ? (
-            <div className="space-y-2">
-              <Label className="text-xs">Options</Label>
-              {editOptions.map((opt, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-muted-foreground w-5">
-                    {String.fromCharCode(65 + i)}
-                  </span>
-                  <Input
-                    value={opt}
-                    onChange={(e) => {
-                      const next = [...editOptions];
-                      next[i] = e.target.value;
-                      setEditOptions(next);
-                    }}
-                    placeholder={`Option ${String.fromCharCode(65 + i)}`}
-                    className="flex-1"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setEditAnswer(opt)}
-                    className={cn(
-                      "shrink-0 text-xs px-2 py-1 rounded border transition-colors",
-                      editAnswer === opt && opt.trim()
-                        ? "bg-green-500/10 border-green-500 text-green-700 dark:text-green-400"
-                        : "border-border text-muted-foreground hover:bg-muted"
-                    )}
-                  >
-                    {editAnswer === opt && opt.trim() ? "Correct" : "Set correct"}
-                  </button>
-                </div>
-              ))}
-              {editOptions.length < 6 && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setEditOptions([...editOptions, ""])}
-                >
-                  <Plus className="h-3 w-3 mr-1" /> Add option
-                </Button>
-              )}
+          {/* CLOZE: single textarea with {{braces}} syntax */}
+          {card.type === "CLOZE" ? (
+            <div className="space-y-1">
+              <Label className="text-xs">Sentence with blanks</Label>
+              <Textarea
+                value={editPrompt}
+                onChange={(e) => setEditPrompt(e.target.value)}
+                rows={3}
+                placeholder='Use {{double braces}} for blanks. e.g. "The {{mitochondria}} is the powerhouse of the cell"'
+              />
+              <p className="text-xs text-muted-foreground">
+                Wrap answers in {"{{braces}}"} — they become the blanks students fill in.
+              </p>
             </div>
           ) : (
-            <div className="space-y-1">
-              <Label className="text-xs">Answer</Label>
-              <Input
-                value={editAnswer}
-                onChange={(e) => setEditAnswer(e.target.value)}
-              />
-            </div>
+            <>
+              <div className="space-y-1">
+                <Label className="text-xs">
+                  {card.type === "TRUE_FALSE" ? "Statement" : "Question / Prompt"}
+                </Label>
+                <Textarea
+                  value={editPrompt}
+                  onChange={(e) => setEditPrompt(e.target.value)}
+                  rows={2}
+                />
+              </div>
+
+              {/* MCQ: options with correct answer selector */}
+              {card.type === "MCQ" && (
+                <div className="space-y-2">
+                  <Label className="text-xs">Options</Label>
+                  {editOptions.map((opt, i) => (
+                    <div key={i} className="flex items-center gap-2">
+                      <span className="text-xs font-bold text-muted-foreground w-5">
+                        {String.fromCharCode(65 + i)}
+                      </span>
+                      <Input
+                        value={opt}
+                        onChange={(e) => {
+                          const next = [...editOptions];
+                          next[i] = e.target.value;
+                          setEditOptions(next);
+                        }}
+                        placeholder={`Option ${String.fromCharCode(65 + i)}`}
+                        className="flex-1"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setEditAnswer(opt)}
+                        className={cn(
+                          "shrink-0 text-xs px-2 py-1 rounded border transition-colors",
+                          editAnswer === opt && opt.trim()
+                            ? "bg-green-500/10 border-green-500 text-green-700 dark:text-green-400"
+                            : "border-border text-muted-foreground hover:bg-muted"
+                        )}
+                      >
+                        {editAnswer === opt && opt.trim() ? "Correct" : "Set correct"}
+                      </button>
+                    </div>
+                  ))}
+                  {editOptions.length < 6 && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setEditOptions([...editOptions, ""])}
+                    >
+                      <Plus className="h-3 w-3 mr-1" /> Add option
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {/* TRUE_FALSE: toggle buttons */}
+              {card.type === "TRUE_FALSE" && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Correct Answer</Label>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setEditAnswer("true")}
+                      className={cn(
+                        "flex-1 rounded-lg border py-2.5 text-sm font-medium transition-colors",
+                        editAnswer === "true"
+                          ? "border-green-500 bg-green-500/10 text-green-700 dark:text-green-400"
+                          : "border-border hover:bg-muted"
+                      )}
+                    >
+                      True
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setEditAnswer("false")}
+                      className={cn(
+                        "flex-1 rounded-lg border py-2.5 text-sm font-medium transition-colors",
+                        editAnswer === "false"
+                          ? "border-destructive bg-destructive/10 text-destructive"
+                          : "border-border hover:bg-muted"
+                      )}
+                    >
+                      False
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* FLASHCARD / IDENTIFICATION: text answer */}
+              {(card.type === "FLASHCARD" || card.type === "IDENTIFICATION") && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Answer</Label>
+                  <Input
+                    value={editAnswer}
+                    onChange={(e) => setEditAnswer(e.target.value)}
+                  />
+                </div>
+              )}
+            </>
           )}
           <div className="space-y-1">
             <Label className="text-xs">Explanation</Label>
