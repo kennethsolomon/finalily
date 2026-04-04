@@ -1,87 +1,160 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/prisma";
 import { createClient } from "@/lib/supabase/server";
 import { sm2, ratingToQuality } from "@/lib/sm2";
-import { StudyMode } from "@/generated/prisma/client";
 
 async function getAuthUser() {
   const supabase = await createClient();
   const { data: { user }, error } = await supabase.auth.getUser();
   if (error || !user) throw new Error("Unauthorized");
 
-  const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
-  if (!dbUser) throw new Error("User not found");
+  const { data: dbUser, error: userError } = await supabase
+    .from("users")
+    .select("*")
+    .eq("id", user.id)
+    .single();
+  if (userError || !dbUser) throw new Error("User not found");
 
-  return dbUser;
+  return { supabase, user: dbUser };
 }
 
 export async function startSession(data: {
   deckId: string;
   mode: "LEARN" | "QUIZ" | "TEST";
+  filter?: "due" | "weak" | "all";
 }) {
-  const user = await getAuthUser();
+  const { supabase, user } = await getAuthUser();
 
-  const deck = await prisma.deck.findUnique({ where: { id: data.deckId } });
-  if (!deck) throw new Error("Deck not found");
-  if (deck.ownerId !== user.id) throw new Error("Unauthorized");
+  const { data: deck, error: deckError } = await supabase
+    .from("decks")
+    .select("owner_id")
+    .eq("id", data.deckId)
+    .single();
+  if (deckError || !deck) throw new Error("Deck not found");
+  if (deck.owner_id !== user.id) throw new Error("Unauthorized");
 
-  let cards;
-  const now = new Date();
+  let cards: unknown[];
+  const now = new Date().toISOString();
+  const filter = data.filter ?? "due";
 
-  if (data.mode === "LEARN") {
-    // Cards due for review or never reviewed
-    const scheduled = await prisma.card.findMany({
-      where: {
-        deckId: data.deckId,
-        isDraft: false,
-        reviewSchedules: {
-          some: {
-            userId: user.id,
-            nextReviewAt: { lte: now },
-          },
-        },
-      },
-      take: 20,
-    });
+  if (filter === "weak") {
+    // Weak cards only: low ease factor across the deck
+    const { data: weakSchedules } = await supabase
+      .from("review_schedules")
+      .select("card_id")
+      .eq("user_id", user.id)
+      .lt("ease_factor", 2.0)
+      .limit(20);
 
-    const unscheduled = await prisma.card.findMany({
-      where: {
-        deckId: data.deckId,
-        isDraft: false,
-        reviewSchedules: {
-          none: {},
-        },
-      },
-      take: 20 - scheduled.length,
-    });
+    const weakIds = (weakSchedules ?? []).map((r: { card_id: string }) => r.card_id);
+
+    if (weakIds.length > 0) {
+      const { data: weakCards } = await supabase
+        .from("cards")
+        .select("*")
+        .eq("deck_id", data.deckId)
+        .eq("is_draft", false)
+        .in("id", weakIds)
+        .limit(20);
+      cards = weakCards ?? [];
+    } else {
+      cards = [];
+    }
+  } else if (filter === "all") {
+    // All cards in the deck regardless of schedule
+    const { data: allCards } = await supabase
+      .from("cards")
+      .select("*")
+      .eq("deck_id", data.deckId)
+      .eq("is_draft", false)
+      .order("position", { ascending: true })
+      .limit(20);
+    cards = (allCards ?? []).sort(() => Math.random() - 0.5);
+  } else if (data.mode === "LEARN") {
+    // Default "due" filter: cards with a review schedule due now
+    const { data: scheduledCardIds } = await supabase
+      .from("review_schedules")
+      .select("card_id")
+      .eq("user_id", user.id)
+      .lte("next_review_at", now)
+      .limit(20);
+
+    const scheduledIds = (scheduledCardIds ?? []).map((r: { card_id: string }) => r.card_id);
+
+    let scheduled: unknown[] = [];
+    if (scheduledIds.length > 0) {
+      const { data: scheduledCards } = await supabase
+        .from("cards")
+        .select("*")
+        .eq("deck_id", data.deckId)
+        .eq("is_draft", false)
+        .in("id", scheduledIds)
+        .limit(20);
+      scheduled = scheduledCards ?? [];
+    }
+
+    // Cards never reviewed (no review_schedule entry)
+    const { data: allCardIds } = await supabase
+      .from("cards")
+      .select("id")
+      .eq("deck_id", data.deckId)
+      .eq("is_draft", false);
+
+    const { data: reviewedCardIds } = await supabase
+      .from("review_schedules")
+      .select("card_id")
+      .eq("user_id", user.id);
+
+    const reviewedSet = new Set((reviewedCardIds ?? []).map((r: { card_id: string }) => r.card_id));
+    const unscheduledIds = (allCardIds ?? [])
+      .map((c: { id: string }) => c.id)
+      .filter((id: string) => !reviewedSet.has(id));
+
+    let unscheduled: unknown[] = [];
+    const needed = 20 - scheduled.length;
+    if (needed > 0 && unscheduledIds.length > 0) {
+      const { data: unscheduledCards } = await supabase
+        .from("cards")
+        .select("*")
+        .eq("deck_id", data.deckId)
+        .eq("is_draft", false)
+        .in("id", unscheduledIds)
+        .limit(needed);
+      unscheduled = unscheduledCards ?? [];
+    }
 
     cards = [...scheduled, ...unscheduled].slice(0, 20);
   } else if (data.mode === "QUIZ") {
-    cards = await prisma.card.findMany({
-      where: { deckId: data.deckId, isDraft: false },
-      take: 20,
-      orderBy: { position: "asc" },
-    });
-    // Shuffle in memory (limited to 20)
-    cards = cards.sort(() => Math.random() - 0.5);
+    const { data: quizCards } = await supabase
+      .from("cards")
+      .select("*")
+      .eq("deck_id", data.deckId)
+      .eq("is_draft", false)
+      .order("position", { ascending: true })
+      .limit(20);
+    cards = (quizCards ?? []).sort(() => Math.random() - 0.5);
   } else {
-    // TEST: all non-draft cards in order
-    cards = await prisma.card.findMany({
-      where: { deckId: data.deckId, isDraft: false },
-      orderBy: { position: "asc" },
-    });
+    const { data: testCards } = await supabase
+      .from("cards")
+      .select("*")
+      .eq("deck_id", data.deckId)
+      .eq("is_draft", false)
+      .order("position", { ascending: true });
+    cards = testCards ?? [];
   }
 
-  const session = await prisma.studySession.create({
-    data: {
-      userId: user.id,
-      deckId: data.deckId,
-      mode: data.mode as StudyMode,
-      totalCards: cards.length,
-    },
-  });
+  const { data: session, error: sessionError } = await supabase
+    .from("study_sessions")
+    .insert({
+      user_id: user.id,
+      deck_id: data.deckId,
+      mode: data.mode,
+      total_cards: cards.length,
+    })
+    .select()
+    .single();
+  if (sessionError) throw new Error(sessionError.message);
 
   return { session, cards };
 }
@@ -94,113 +167,153 @@ export async function submitAnswer(data: {
   responseTimeMs?: number;
   rating?: "again" | "hard" | "good" | "easy";
 }) {
-  const user = await getAuthUser();
+  const { supabase, user } = await getAuthUser();
 
-  const session = await prisma.studySession.findUnique({
-    where: { id: data.sessionId },
-  });
-  if (!session || session.userId !== user.id) throw new Error("Session not found or unauthorized");
+  const { data: session, error: sessionError } = await supabase
+    .from("study_sessions")
+    .select("*")
+    .eq("id", data.sessionId)
+    .single();
+  if (sessionError || !session || session.user_id !== user.id)
+    throw new Error("Session not found or unauthorized");
 
-  // Verify card belongs to the session's deck
-  const card = await prisma.card.findUnique({ where: { id: data.cardId } });
-  if (!card || card.deckId !== session.deckId) throw new Error("Card does not belong to this session's deck");
+  const { data: card, error: cardError } = await supabase
+    .from("cards")
+    .select("deck_id")
+    .eq("id", data.cardId)
+    .single();
+  if (cardError || !card || card.deck_id !== session.deck_id)
+    throw new Error("Card does not belong to this session's deck");
 
-  const answer = await prisma.sessionAnswer.create({
-    data: {
-      sessionId: data.sessionId,
-      cardId: data.cardId,
-      isCorrect: data.isCorrect,
-      confidence: data.confidence,
-      responseTimeMs: data.responseTimeMs,
-    },
-  });
+  const { data: answer, error: answerError } = await supabase
+    .from("session_answers")
+    .insert({
+      session_id: data.sessionId,
+      card_id: data.cardId,
+      is_correct: data.isCorrect,
+      confidence: data.confidence ?? null,
+      response_time_ms: data.responseTimeMs ?? null,
+    })
+    .select()
+    .single();
+  if (answerError) throw new Error(answerError.message);
 
-  // Update correct count on session
   if (data.isCorrect) {
-    await prisma.studySession.update({
-      where: { id: data.sessionId },
-      data: { correctCount: { increment: 1 } },
+    const { error: incrError } = await supabase.rpc("increment_correct_count", {
+      session_id: data.sessionId,
     });
+    if (incrError) {
+      // Fallback: fetch and update manually
+      const { data: currentSession } = await supabase
+        .from("study_sessions")
+        .select("correct_count")
+        .eq("id", data.sessionId)
+        .single();
+      if (currentSession) {
+        await supabase
+          .from("study_sessions")
+          .update({ correct_count: (currentSession.correct_count ?? 0) + 1 })
+          .eq("id", data.sessionId);
+      }
+    }
   }
 
-  // Update ReviewSchedule for LEARN mode
-  if (session.mode === StudyMode.LEARN && data.rating) {
+  if (session.mode === "LEARN" && data.rating) {
     const quality = ratingToQuality(data.rating);
 
-    const existing = await prisma.reviewSchedule.findUnique({
-      where: { userId_cardId: { userId: user.id, cardId: data.cardId } },
-    });
+    const { data: existing } = await supabase
+      .from("review_schedules")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("card_id", data.cardId)
+      .single();
 
     const sm2Result = sm2({
       quality,
-      easeFactor: existing?.easeFactor ?? 2.5,
-      intervalDays: existing?.intervalDays ?? 0,
+      easeFactor: existing?.ease_factor ?? 2.5,
+      intervalDays: existing?.interval_days ?? 0,
       repetitions: existing?.repetitions ?? 0,
     });
 
-    await prisma.reviewSchedule.upsert({
-      where: { userId_cardId: { userId: user.id, cardId: data.cardId } },
-      create: {
-        userId: user.id,
-        cardId: data.cardId,
-        easeFactor: sm2Result.easeFactor,
-        intervalDays: sm2Result.intervalDays,
+    const now = new Date().toISOString();
+
+    if (existing) {
+      await supabase
+        .from("review_schedules")
+        .update({
+          ease_factor: sm2Result.easeFactor,
+          interval_days: sm2Result.intervalDays,
+          repetitions: sm2Result.repetitions,
+          next_review_at: sm2Result.nextReviewAt.toISOString(),
+          last_reviewed_at: now,
+        })
+        .eq("user_id", user.id)
+        .eq("card_id", data.cardId);
+    } else {
+      await supabase.from("review_schedules").insert({
+        user_id: user.id,
+        card_id: data.cardId,
+        ease_factor: sm2Result.easeFactor,
+        interval_days: sm2Result.intervalDays,
         repetitions: sm2Result.repetitions,
-        nextReviewAt: sm2Result.nextReviewAt,
-        lastReviewedAt: new Date(),
-      },
-      update: {
-        easeFactor: sm2Result.easeFactor,
-        intervalDays: sm2Result.intervalDays,
-        repetitions: sm2Result.repetitions,
-        nextReviewAt: sm2Result.nextReviewAt,
-        lastReviewedAt: new Date(),
-      },
-    });
+        next_review_at: sm2Result.nextReviewAt.toISOString(),
+        last_reviewed_at: now,
+      });
+    }
   }
 
   return answer;
 }
 
 export async function completeSession(sessionId: string, durationSeconds: number) {
-  const user = await getAuthUser();
+  const { supabase, user } = await getAuthUser();
 
-  const session = await prisma.studySession.findUnique({ where: { id: sessionId } });
-  if (!session || session.userId !== user.id) throw new Error("Session not found or unauthorized");
+  const { data: session, error: sessionError } = await supabase
+    .from("study_sessions")
+    .select("user_id")
+    .eq("id", sessionId)
+    .single();
+  if (sessionError || !session || session.user_id !== user.id)
+    throw new Error("Session not found or unauthorized");
 
-  const completed = await prisma.studySession.update({
-    where: { id: sessionId },
-    data: {
-      completedAt: new Date(),
-      durationSeconds,
-    },
-  });
+  const now = new Date();
+
+  const { data: completed, error } = await supabase
+    .from("study_sessions")
+    .update({
+      completed_at: now.toISOString(),
+      duration_seconds: durationSeconds,
+    })
+    .eq("id", sessionId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
 
   // Update streak
-  const now = new Date();
-  const lastUpdated = user.streakUpdatedAt;
+  const lastUpdated = user.streak_updated_at ? new Date(user.streak_updated_at) : null;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const lastDay = lastUpdated
     ? new Date(lastUpdated.getFullYear(), lastUpdated.getMonth(), lastUpdated.getDate())
     : null;
 
-  const diffDays = lastDay ? Math.floor((today.getTime() - lastDay.getTime()) / 86400000) : null;
+  const diffDays = lastDay
+    ? Math.floor((today.getTime() - lastDay.getTime()) / 86400000)
+    : null;
 
-  let streakCount = user.streakCount;
+  let streakCount = user.streak_count ?? 0;
   if (diffDays === null || diffDays > 1) {
     streakCount = 1;
   } else if (diffDays === 1) {
-    streakCount = user.streakCount + 1;
+    streakCount = (user.streak_count ?? 0) + 1;
   }
-  // diffDays === 0 means already studied today, no change
 
-  await prisma.user.update({
-    where: { id: user.id },
-    data: {
-      streakCount,
-      streakUpdatedAt: now,
-    },
-  });
+  await supabase
+    .from("users")
+    .update({
+      streak_count: streakCount,
+      streak_updated_at: now.toISOString(),
+    })
+    .eq("id", user.id);
 
   revalidatePath("/dashboard");
   return completed;

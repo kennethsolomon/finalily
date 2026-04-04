@@ -4,12 +4,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Image from "next/image";
 import { Mascot } from "@/components/mascot";
-import { Home, Library, PlusCircle, User, Flame } from "lucide-react";
+import { Home, Library, PlusCircle, User, Flame, BarChart3 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Home", icon: Home },
   { href: "/decks", label: "Library", icon: Library },
   { href: "/decks/new", label: "Create Deck", icon: PlusCircle },
+  { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/settings", label: "Settings", icon: User },
 ];
 

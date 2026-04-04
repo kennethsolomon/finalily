@@ -10,11 +10,12 @@ import { IdentificationStudy } from "@/components/cards/study/identification-stu
 import { TrueFalseStudy } from "@/components/cards/study/true-false-study";
 import { ClozeStudy } from "@/components/cards/study/cloze-study";
 import { cn } from "@/lib/utils";
-import { Timer, ChevronLeft } from "lucide-react";
+import { Timer, ChevronLeft, Calendar, AlertTriangle, Layers } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 
 type StudyMode = "learn" | "quiz" | "test";
+type StudyFilter = "due" | "weak" | "all";
 type Rating = "again" | "hard" | "good" | "easy";
 
 interface Card {
@@ -66,7 +67,8 @@ export default function StudyPage() {
   const router = useRouter();
   const mode = (searchParams.get("mode") ?? "learn") as StudyMode;
 
-  const [loading, setLoading] = useState(true);
+  const [filter, setFilter] = useState<StudyFilter | null>(searchParams.get("filter") as StudyFilter | null);
+  const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [cards, setCards] = useState<Card[]>([]);
   const [current, setCurrent] = useState(0);
@@ -77,14 +79,17 @@ export default function StudyPage() {
 
   const { seconds, formatted, stop } = useTimer();
 
-  useEffect(() => {
+  const beginSession = useCallback((selectedFilter: StudyFilter) => {
+    setFilter(selectedFilter);
+    setLoading(true);
+
     const modeMap: Record<StudyMode, "LEARN" | "QUIZ" | "TEST"> = {
       learn: "LEARN",
       quiz: "QUIZ",
       test: "TEST",
     };
 
-    startSession({ deckId: params.id, mode: modeMap[mode] })
+    startSession({ deckId: params.id, mode: modeMap[mode], filter: selectedFilter })
       .then(({ session, cards: c }) => {
         setSessionId(session.id);
         setCards(c as Card[]);
@@ -92,6 +97,14 @@ export default function StudyPage() {
       })
       .catch(() => router.push(`/decks/${params.id}`));
   }, [params.id, mode, router]);
+
+  // Auto-start if filter is provided via URL
+  useEffect(() => {
+    if (filter) {
+      beginSession(filter);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleFinish = useCallback(async (sid: string, allAnswers: TestAnswer[]) => {
     stop();
@@ -147,6 +160,46 @@ export default function StudyPage() {
     advance();
   }, [sessionId, cards, current, advance]);
 
+  // Filter selection screen
+  if (!filter && !loading && !sessionId) {
+    const FILTERS: { value: StudyFilter; label: string; description: string; icon: typeof Calendar }[] = [
+      { value: "due", label: "Due Cards", description: "Cards scheduled for review + new cards", icon: Calendar },
+      { value: "weak", label: "Weak Cards", description: "Cards you struggle with (low ease factor)", icon: AlertTriangle },
+      { value: "all", label: "All Cards", description: "Study every card regardless of schedule", icon: Layers },
+    ];
+
+    return (
+      <div className="flex flex-col gap-6 max-w-md mx-auto mt-8">
+        <div>
+          <Link
+            href={`/decks/${params.id}`}
+            className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "mb-4")}
+          >
+            <ChevronLeft className="size-4 mr-1" />
+            Back to Deck
+          </Link>
+          <h1 className="text-xl font-bold capitalize">{mode} Mode</h1>
+          <p className="text-sm text-muted-foreground mt-1">Choose which cards to study</p>
+        </div>
+        <div className="flex flex-col gap-2">
+          {FILTERS.map((f) => (
+            <button
+              key={f.value}
+              onClick={() => beginSession(f.value)}
+              className="flex items-center gap-3 rounded-lg border p-4 text-left transition-colors hover:bg-accent hover:text-accent-foreground"
+            >
+              <f.icon className="size-5 text-muted-foreground shrink-0" />
+              <div>
+                <p className="text-sm font-medium">{f.label}</p>
+                <p className="text-xs text-muted-foreground">{f.description}</p>
+              </div>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[60vh]">
@@ -158,13 +211,21 @@ export default function StudyPage() {
   if (cards.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
-        <p className="text-muted-foreground">No cards available for this mode.</p>
-        <Link
-          href={`/decks/${params.id}`}
-          className={cn(buttonVariants({ variant: "outline" }))}
-        >
-          Back to Deck
-        </Link>
+        <p className="text-muted-foreground">No cards available for this filter.</p>
+        <div className="flex gap-2">
+          <button
+            onClick={() => { setFilter(null); setSessionId(null); }}
+            className={cn(buttonVariants({ variant: "outline" }))}
+          >
+            Try Another Filter
+          </button>
+          <Link
+            href={`/decks/${params.id}`}
+            className={cn(buttonVariants({ variant: "ghost" }))}
+          >
+            Back to Deck
+          </Link>
+        </div>
       </div>
     );
   }

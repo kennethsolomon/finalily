@@ -11,6 +11,8 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { createClient } from "@/lib/supabase/client";
 import { updateProfile } from "@/actions/profile";
 import { ThemePicker } from "@/components/theme-picker";
+import { requestNotificationPermission, getNotificationPermission } from "@/lib/notifications";
+import { Bell } from "lucide-react";
 import {
   FlaskConical,
   Atom,
@@ -39,6 +41,7 @@ export default function SettingsPage() {
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [weeklyGoal, setWeeklyGoal] = useState(5);
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>([]);
+  const [notificationStatus, setNotificationStatus] = useState<string>("default");
   const [saving, setSaving] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
@@ -54,6 +57,7 @@ export default function SettingsPage() {
         return;
       }
       setAvatarUrl(user.user_metadata?.avatar_url ?? null);
+      setNotificationStatus(getNotificationPermission());
 
       const { getProfile } = await import("@/actions/profile");
       const profile = await getProfile();
@@ -143,6 +147,44 @@ export default function SettingsPage() {
         <div>
           <Label className="mb-2 block">Theme</Label>
           <ThemePicker />
+        </div>
+      </section>
+
+      {/* Notifications */}
+      <section className="space-y-4">
+        <h2 className="text-base font-medium">Notifications</h2>
+        <Separator />
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <Bell className="size-5 text-muted-foreground" />
+            <div>
+              <p className="text-sm font-medium">Study reminders</p>
+              <p className="text-xs text-muted-foreground">
+                {notificationStatus === "granted"
+                  ? "Notifications are enabled"
+                  : notificationStatus === "denied"
+                    ? "Notifications are blocked in your browser"
+                    : notificationStatus === "unsupported"
+                      ? "Your browser does not support notifications"
+                      : "Get reminded to keep your streak alive"}
+              </p>
+            </div>
+          </div>
+          {notificationStatus !== "granted" && notificationStatus !== "unsupported" && (
+            <button
+              onClick={async () => {
+                const granted = await requestNotificationPermission();
+                setNotificationStatus(granted ? "granted" : "denied");
+              }}
+              disabled={notificationStatus === "denied"}
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+            >
+              Enable
+            </button>
+          )}
+          {notificationStatus === "granted" && (
+            <span className="text-xs text-green-600 font-medium">Active</span>
+          )}
         </div>
       </section>
 
