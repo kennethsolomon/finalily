@@ -22,8 +22,8 @@ export function Sidebar() {
       <div className="flex items-center gap-3 px-6 py-5 border-b">
         <Image src="/logo.png" alt="FinaLily" width={36} height={36} className="rounded-lg" />
         <div>
-          <h1 className="text-lg font-bold">FinaLily</h1>
-          <p className="text-xs text-muted-foreground">Study smarter</p>
+          <h1 className="text-lg font-bold">Finalily</h1>
+          <p className="text-xs text-muted-foreground">A study app that actually makes sense.</p>
         </div>
       </div>
 
@@ -32,7 +32,7 @@ export function Sidebar() {
           const isActive =
             item.href === "/"
               ? pathname === "/"
-              : pathname.startsWith(item.href);
+              : pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}

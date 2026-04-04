@@ -46,7 +46,14 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         {children}
-        <Toaster position="bottom-right" richColors closeButton />
+        <Toaster
+          position="bottom-right"
+          richColors
+          closeButton
+          visibleToasts={3}
+          toastOptions={{ duration: 2000 }}
+          gap={8}
+        />
       </body>
     </html>
   );
