@@ -13,7 +13,7 @@ interface CardStudyProps {
     options?: unknown;
     clozeText?: string | null;
   };
-  onAnswer: (isCorrect: boolean) => void;
+  onAnswer: (isCorrect: boolean, userResponse?: string) => void;
   showResult: boolean;
 }
 
@@ -27,7 +27,7 @@ export function MCQStudy({ card, onAnswer, showResult }: CardStudyProps) {
   function handleSelect(option: string) {
     if (selected !== null) return;
     setSelected(option);
-    onAnswer(option === card.answer);
+    onAnswer(option === card.answer, option);
   }
 
   function getOptionClass(option: string) {

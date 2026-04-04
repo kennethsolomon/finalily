@@ -13,7 +13,7 @@ interface CardStudyProps {
     options?: unknown;
     clozeText?: string | null;
   };
-  onAnswer: (isCorrect: boolean) => void;
+  onAnswer: (isCorrect: boolean, userResponse?: string) => void;
   showResult: boolean;
 }
 
@@ -25,7 +25,7 @@ export function TrueFalseStudy({ card, onAnswer, showResult }: CardStudyProps) {
   function handleSelect(value: boolean) {
     if (selected !== null) return;
     setSelected(value);
-    onAnswer(value === correctAnswer);
+    onAnswer(value === correctAnswer, String(value));
   }
 
   function getButtonClass(value: boolean) {

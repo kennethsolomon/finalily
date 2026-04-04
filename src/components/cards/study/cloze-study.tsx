@@ -14,7 +14,7 @@ interface CardStudyProps {
     options?: unknown;
     clozeText?: string | null;
   };
-  onAnswer: (isCorrect: boolean) => void;
+  onAnswer: (isCorrect: boolean, userResponse?: string) => void;
   showResult: boolean;
 }
 
@@ -53,7 +53,7 @@ export function ClozeStudy({ card, onAnswer, showResult }: CardStudyProps) {
     );
     setResults(res);
     setSubmitted(true);
-    onAnswer(res.every(Boolean));
+    onAnswer(res.every(Boolean), inputs.map((s) => s.trim()).join("|||"));
   }
 
   return (
@@ -111,7 +111,7 @@ export function ClozeStudy({ card, onAnswer, showResult }: CardStudyProps) {
           </div>
         ))}
 
-        {!submitted && (
+        {!submitted && blanks.length > 0 && (
           <button
             type="submit"
             disabled={inputs.some((v) => !v.trim())}
@@ -125,6 +125,12 @@ export function ClozeStudy({ card, onAnswer, showResult }: CardStudyProps) {
           </button>
         )}
       </form>
+
+      {blanks.length === 0 && !submitted && (
+        <div className="rounded-xl border border-amber-300 bg-amber-50/50 p-4 text-sm text-amber-700 dark:bg-amber-500/10 dark:text-amber-400">
+          This card has no blanks to fill in. It may be misconfigured.
+        </div>
+      )}
 
       {submitted && card.explanation && (
         <div className="rounded-xl border bg-muted/50 p-4 text-sm text-muted-foreground">

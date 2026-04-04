@@ -26,11 +26,13 @@ interface Card {
   explanation?: string | null;
   options?: unknown;
   clozeText?: string | null;
+  cloze_text?: string | null;
 }
 
 interface TestAnswer {
   cardId: string;
   isCorrect: boolean;
+  userResponse?: string;
 }
 
 function useTimer() {
@@ -51,7 +53,7 @@ function useTimer() {
   return { seconds, formatted, stop };
 }
 
-function CardComponent({ card, onAnswer, showResult }: { card: Card; onAnswer: (c: boolean) => void; showResult: boolean }) {
+function CardComponent({ card, onAnswer, showResult }: { card: Card; onAnswer: (c: boolean, userResponse?: string) => void; showResult: boolean }) {
   switch (card.type) {
     case "MCQ": return <MCQStudy card={card} onAnswer={onAnswer} showResult={showResult} />;
     case "IDENTIFICATION": return <IdentificationStudy card={card} onAnswer={onAnswer} showResult={showResult} />;
@@ -92,7 +94,12 @@ export default function StudyPage() {
     startSession({ deckId: params.id, mode: modeMap[mode], filter: selectedFilter })
       .then(({ session, cards: c }) => {
         setSessionId(session.id);
-        setCards(c as Card[]);
+        // Normalize snake_case fields from Supabase to camelCase
+        const normalized = (c as Record<string, unknown>[]).map((card) => ({
+          ...card,
+          clozeText: card.cloze_text ?? card.clozeText ?? null,
+        })) as Card[];
+        setCards(normalized);
         setLoading(false);
       })
       .catch(() => router.push(`/decks/${params.id}`));
@@ -111,11 +118,15 @@ export default function StudyPage() {
     setFinishing(true);
 
     if (mode === "test" && allAnswers.length > 0) {
-      await Promise.all(
+      const results = await Promise.allSettled(
         allAnswers.map((a) =>
-          submitAnswer({ sessionId: sid, cardId: a.cardId, isCorrect: a.isCorrect })
+          submitAnswer({ sessionId: sid, cardId: a.cardId, isCorrect: a.isCorrect, userResponse: a.userResponse })
         )
       );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed > 0) {
+        console.error(`${failed}/${allAnswers.length} answer submissions failed`);
+      }
     }
 
     await completeSession(sid, seconds);
@@ -133,23 +144,26 @@ export default function StudyPage() {
     }
   }, [current, cards.length, sessionId, testAnswers, handleFinish]);
 
-  const handleAnswer = useCallback(async (isCorrect: boolean) => {
+  const handleAnswer = useCallback(async (isCorrect: boolean, userResponse?: string) => {
     if (!sessionId || answered) return;
     setAnswered(true);
     setShowResult(true);
 
     if (mode === "test") {
-      setTestAnswers((prev) => [...prev, { cardId: cards[current].id, isCorrect }]);
+      setTestAnswers((prev) => [...prev, { cardId: cards[current].id, isCorrect, userResponse }]);
       setTimeout(advance, 800);
     } else if (mode === "quiz") {
-      await submitAnswer({ sessionId, cardId: cards[current].id, isCorrect });
+      await submitAnswer({ sessionId, cardId: cards[current].id, isCorrect, userResponse });
       setTimeout(advance, 2000);
     }
     // LEARN: wait for rating
   }, [sessionId, answered, mode, cards, current, advance]);
 
+  const [submittingRating, setSubmittingRating] = useState(false);
+
   const handleRating = useCallback(async (rating: Rating) => {
-    if (!sessionId) return;
+    if (!sessionId || submittingRating) return;
+    setSubmittingRating(true);
     const isCorrect = rating !== "again";
     await submitAnswer({
       sessionId,
@@ -157,8 +171,9 @@ export default function StudyPage() {
       isCorrect,
       rating,
     });
+    setSubmittingRating(false);
     advance();
-  }, [sessionId, cards, current, advance]);
+  }, [sessionId, cards, current, advance, submittingRating]);
 
   // Filter selection screen
   if (!filter && !loading && !sessionId) {
@@ -285,9 +300,11 @@ export default function StudyPage() {
               <button
                 key={r.value}
                 onClick={() => handleRating(r.value)}
+                disabled={submittingRating}
                 className={cn(
                   "rounded-xl border py-3 text-sm font-medium transition-colors",
-                  r.className
+                  r.className,
+                  submittingRating && "opacity-50 pointer-events-none"
                 )}
               >
                 {r.label}

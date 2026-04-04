@@ -14,7 +14,7 @@ interface CardStudyProps {
     options?: unknown;
     clozeText?: string | null;
   };
-  onAnswer: (isCorrect: boolean) => void;
+  onAnswer: (isCorrect: boolean, userResponse?: string) => void;
   showResult: boolean;
 }
 
@@ -29,7 +29,7 @@ export function IdentificationStudy({ card, onAnswer, showResult }: CardStudyPro
     const correct = value.trim().toLowerCase() === card.answer.trim().toLowerCase();
     setIsCorrect(correct);
     setSubmitted(true);
-    onAnswer(correct);
+    onAnswer(correct, value.trim());
   }
 
   return (

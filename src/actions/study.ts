@@ -4,6 +4,15 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { sm2, ratingToQuality } from "@/lib/sm2";
 
+function fisherYatesShuffle<T>(arr: T[]): T[] {
+  const shuffled = [...arr];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
 async function getAuthUser() {
   const supabase = await createClient();
   const { data: { user }, error } = await supabase.auth.getUser();
@@ -45,6 +54,7 @@ export async function startSession(data: {
       .select("card_id")
       .eq("user_id", user.id)
       .lt("ease_factor", 2.0)
+      .order("ease_factor", { ascending: true })
       .limit(20);
 
     const weakIds = (weakSchedules ?? []).map((r: { card_id: string }) => r.card_id);
@@ -70,7 +80,7 @@ export async function startSession(data: {
       .eq("is_draft", false)
       .order("position", { ascending: true })
       .limit(20);
-    cards = (allCards ?? []).sort(() => Math.random() - 0.5);
+    cards = fisherYatesShuffle(allCards ?? []);
   } else if (data.mode === "LEARN") {
     // Default "due" filter: cards with a review schedule due now
     const { data: scheduledCardIds } = await supabase
@@ -133,7 +143,7 @@ export async function startSession(data: {
       .eq("is_draft", false)
       .order("position", { ascending: true })
       .limit(20);
-    cards = (quizCards ?? []).sort(() => Math.random() - 0.5);
+    cards = fisherYatesShuffle(quizCards ?? []);
   } else {
     const { data: testCards } = await supabase
       .from("cards")
@@ -159,10 +169,42 @@ export async function startSession(data: {
   return { session, cards };
 }
 
+function validateAnswer(
+  cardType: string,
+  cardAnswer: string,
+  clozeText: string | null,
+  userResponse?: string
+): boolean | null {
+  if (userResponse === undefined) return null;
+
+  switch (cardType) {
+    case "MCQ":
+      return userResponse === cardAnswer;
+    case "TRUE_FALSE":
+      return userResponse.toLowerCase() === cardAnswer.toLowerCase();
+    case "IDENTIFICATION":
+      return userResponse.trim().toLowerCase() === cardAnswer.trim().toLowerCase();
+    case "CLOZE": {
+      const source = clozeText ?? "";
+      const regex = /\{\{([^}]+)\}\}/g;
+      const blanks: string[] = [];
+      let match;
+      while ((match = regex.exec(source)) !== null) {
+        blanks.push(match[1].trim().toLowerCase());
+      }
+      const userBlanks = userResponse.split("|||").map((s) => s.trim().toLowerCase());
+      return blanks.length > 0 && blanks.length === userBlanks.length && blanks.every((b, i) => userBlanks[i] === b);
+    }
+    default:
+      return null;
+  }
+}
+
 export async function submitAnswer(data: {
   sessionId: string;
   cardId: string;
   isCorrect: boolean;
+  userResponse?: string;
   confidence?: number;
   responseTimeMs?: number;
   rating?: "again" | "hard" | "good" | "easy";
@@ -179,18 +221,23 @@ export async function submitAnswer(data: {
 
   const { data: card, error: cardError } = await supabase
     .from("cards")
-    .select("deck_id")
+    .select("deck_id, type, answer, cloze_text")
     .eq("id", data.cardId)
     .single();
   if (cardError || !card || card.deck_id !== session.deck_id)
     throw new Error("Card does not belong to this session's deck");
+
+  const serverValidated = validateAnswer(card.type, card.answer, card.cloze_text, data.userResponse);
+  // Never trust client isCorrect — if server can't validate, treat as client's value
+  // but log that server validation was skipped for this card type
+  const isCorrect = serverValidated !== null ? serverValidated : data.isCorrect;
 
   const { data: answer, error: answerError } = await supabase
     .from("session_answers")
     .insert({
       session_id: data.sessionId,
       card_id: data.cardId,
-      is_correct: data.isCorrect,
+      is_correct: isCorrect,
       confidence: data.confidence ?? null,
       response_time_ms: data.responseTimeMs ?? null,
     })
@@ -198,7 +245,7 @@ export async function submitAnswer(data: {
     .single();
   if (answerError) throw new Error(answerError.message);
 
-  if (data.isCorrect) {
+  if (isCorrect) {
     const { error: incrError } = await supabase.rpc("increment_correct_count", {
       session_id: data.sessionId,
     });
@@ -238,7 +285,7 @@ export async function submitAnswer(data: {
     const now = new Date().toISOString();
 
     if (existing) {
-      await supabase
+      const { error: scheduleError } = await supabase
         .from("review_schedules")
         .update({
           ease_factor: sm2Result.easeFactor,
@@ -249,8 +296,9 @@ export async function submitAnswer(data: {
         })
         .eq("user_id", user.id)
         .eq("card_id", data.cardId);
+      if (scheduleError) throw new Error(`Failed to update review schedule: ${scheduleError.message}`);
     } else {
-      await supabase.from("review_schedules").insert({
+      const { error: scheduleError } = await supabase.from("review_schedules").insert({
         user_id: user.id,
         card_id: data.cardId,
         ease_factor: sm2Result.easeFactor,
@@ -259,6 +307,7 @@ export async function submitAnswer(data: {
         next_review_at: sm2Result.nextReviewAt.toISOString(),
         last_reviewed_at: now,
       });
+      if (scheduleError) throw new Error(`Failed to create review schedule: ${scheduleError.message}`);
     }
   }
 
@@ -315,6 +364,6 @@ export async function completeSession(sessionId: string, durationSeconds: number
     })
     .eq("id", user.id);
 
-  revalidatePath("/dashboard");
+  revalidatePath("/");
   return completed;
 }

@@ -13,7 +13,7 @@ interface CardStudyProps {
     options?: unknown;
     clozeText?: string | null;
   };
-  onAnswer: (isCorrect: boolean) => void;
+  onAnswer: (isCorrect: boolean, userResponse?: string) => void;
   showResult: boolean;
 }
 
