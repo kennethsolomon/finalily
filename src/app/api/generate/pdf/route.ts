@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { prisma } from "@/lib/prisma";
 import { getOpenRouterClient, AI_MODEL } from "@/lib/openrouter";
 
 export const dynamic = "force-dynamic";
@@ -78,7 +77,7 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: "File exceeds 20 MB limit" }), { status: 400 });
   }
 
-  // Validate PDF magic bytes (more reliable than file.type)
+  // Validate PDF magic bytes
   const arrayBuffer = await file.arrayBuffer();
   const buffer = Buffer.from(arrayBuffer);
   if (buffer.length < 5 || buffer.subarray(0, 5).toString() !== "%PDF-") {
@@ -86,12 +85,17 @@ export async function POST(req: NextRequest) {
   }
 
   // Validate deck ownership
-  const deck = await prisma.deck.findUnique({ where: { id: deckId } });
-  if (!deck || deck.ownerId !== user.id) {
+  const { data: deck, error: deckError } = await supabase
+    .from("decks")
+    .select("owner_id")
+    .eq("id", deckId)
+    .single();
+
+  if (deckError || !deck || deck.owner_id !== user.id) {
     return new Response(JSON.stringify({ error: "Deck not found or unauthorized" }), { status: 403 });
   }
 
-  // Extract text BEFORE uploading to storage (avoid orphan uploads on parse failure)
+  // Extract text BEFORE uploading to storage
   let parsed: { text: string; numpages: number };
   try {
     parsed = await parsePdf(buffer);
@@ -138,16 +142,25 @@ export async function POST(req: NextRequest) {
   const chunks = chunkText(extractedText, CHUNK_WORDS);
 
   // Create SourceDocument
-  const sourceDoc = await prisma.sourceDocument.create({
-    data: {
-      deckId,
+  const { data: sourceDoc, error: sourceDocError } = await supabase
+    .from("source_documents")
+    .insert({
+      deck_id: deckId,
       filename: file.name,
-      mimeType: "application/pdf",
-      storagePath: `${user.id}/${filename}`,
-      extractedText,
+      mime_type: "application/pdf",
+      storage_path: `${user.id}/${filename}`,
+      extracted_text: extractedText,
       chunks,
-    },
-  });
+    })
+    .select("id")
+    .single();
+
+  if (sourceDocError || !sourceDoc) {
+    return new Response(
+      JSON.stringify({ error: `Failed to create source document: ${sourceDocError?.message}` }),
+      { status: 500 }
+    );
+  }
 
   // Stream NDJSON response
   const encoder = new TextEncoder();
@@ -194,18 +207,24 @@ export async function POST(req: NextRequest) {
 
           // Batch insert all valid cards for this chunk
           if (validCards.length > 0) {
-            await prisma.card.createMany({
-              data: validCards.map((c, idx) => ({
-                deckId: deckId!,
+            const { error: insertError } = await supabase.from("cards").insert(
+              validCards.map((c, idx) => ({
+                deck_id: deckId!,
                 type: c.type as "FLASHCARD" | "MCQ" | "IDENTIFICATION" | "TRUE_FALSE" | "CLOZE",
                 prompt: c.prompt,
                 answer: c.answer,
                 explanation: c.explanation,
-                sourceChunkId: sourceDoc.id,
+                source_chunk_id: sourceDoc.id,
                 position: totalCreated + idx,
-                isDraft: true,
-              })),
-            });
+                is_draft: true,
+              }))
+            );
+            if (insertError) {
+              controller.enqueue(
+                encoder.encode(JSON.stringify({ error: `Card insert failed: ${insertError.message}`, chunk: i + 1 }) + "\n")
+              );
+              continue;
+            }
             totalCreated += validCards.length;
           }
 
