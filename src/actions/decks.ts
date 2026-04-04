@@ -1,19 +1,21 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { prisma } from "@/lib/prisma";
 import { createClient } from "@/lib/supabase/server";
-import { SourceType } from "@/generated/prisma/client";
 
 async function getAuthUser() {
   const supabase = await createClient();
   const { data: { user }, error } = await supabase.auth.getUser();
   if (error || !user) throw new Error("Unauthorized");
 
-  const dbUser = await prisma.user.findUnique({ where: { id: user.id } });
-  if (!dbUser) throw new Error("User not found");
+  const { data: dbUser, error: userError } = await supabase
+    .from("users")
+    .select("*")
+    .eq("id", user.id)
+    .single();
+  if (userError || !dbUser) throw new Error("User not found");
 
-  return dbUser;
+  return { supabase, user: dbUser };
 }
 
 export async function createDeck(data: {
@@ -22,19 +24,23 @@ export async function createDeck(data: {
   description?: string;
   sourceType: "TOPIC" | "PDF" | "MANUAL";
 }) {
-  const user = await getAuthUser();
+  const { supabase, user } = await getAuthUser();
 
-  const deck = await prisma.deck.create({
-    data: {
-      ownerId: user.id,
+  const { data: deck, error } = await supabase
+    .from("decks")
+    .insert({
+      owner_id: user.id,
       title: data.title,
       subject: data.subject,
-      description: data.description,
-      sourceType: data.sourceType as SourceType,
-    },
-  });
+      description: data.description ?? null,
+      source_type: data.sourceType,
+    })
+    .select()
+    .single();
 
-  revalidatePath("/dashboard");
+  if (error) throw new Error(error.message);
+
+  revalidatePath("/");
   return deck;
 }
 
@@ -42,68 +48,104 @@ export async function updateDeck(
   deckId: string,
   data: { title?: string; subject?: string; description?: string }
 ) {
-  const user = await getAuthUser();
+  const { supabase, user } = await getAuthUser();
 
-  const deck = await prisma.deck.findUnique({ where: { id: deckId } });
-  if (!deck || deck.ownerId !== user.id) throw new Error("Deck not found or unauthorized");
+  const { data: existing, error: fetchError } = await supabase
+    .from("decks")
+    .select("owner_id")
+    .eq("id", deckId)
+    .single();
+  if (fetchError || !existing || existing.owner_id !== user.id)
+    throw new Error("Deck not found or unauthorized");
 
-  const updated = await prisma.deck.update({
-    where: { id: deckId },
-    data,
-  });
+  const updatePayload: Record<string, unknown> = {};
+  if (data.title !== undefined) updatePayload.title = data.title;
+  if (data.subject !== undefined) updatePayload.subject = data.subject;
+  if (data.description !== undefined) updatePayload.description = data.description;
+
+  const { data: updated, error } = await supabase
+    .from("decks")
+    .update(updatePayload)
+    .eq("id", deckId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
 
   revalidatePath(`/decks/${deckId}`);
-  revalidatePath("/dashboard");
+  revalidatePath("/");
   return updated;
 }
 
 export async function deleteDeck(deckId: string) {
-  const user = await getAuthUser();
+  const { supabase, user } = await getAuthUser();
 
-  const deck = await prisma.deck.findUnique({ where: { id: deckId } });
-  if (!deck || deck.ownerId !== user.id) throw new Error("Deck not found or unauthorized");
+  const { data: existing, error: fetchError } = await supabase
+    .from("decks")
+    .select("owner_id")
+    .eq("id", deckId)
+    .single();
+  if (fetchError || !existing || existing.owner_id !== user.id)
+    throw new Error("Deck not found or unauthorized");
 
-  await prisma.deck.delete({ where: { id: deckId } });
+  const { error } = await supabase.from("decks").delete().eq("id", deckId);
+  if (error) throw new Error(error.message);
 
-  revalidatePath("/dashboard");
+  revalidatePath("/");
+  return { success: true };
 }
 
 export async function publishDeck(deckId: string) {
-  const user = await getAuthUser();
+  const { supabase, user } = await getAuthUser();
 
-  const deck = await prisma.deck.findUnique({ where: { id: deckId } });
-  if (!deck || deck.ownerId !== user.id) throw new Error("Deck not found or unauthorized");
+  const { data: existing, error: fetchError } = await supabase
+    .from("decks")
+    .select("owner_id")
+    .eq("id", deckId)
+    .single();
+  if (fetchError || !existing || existing.owner_id !== user.id)
+    throw new Error("Deck not found or unauthorized");
 
-  await prisma.card.updateMany({
-    where: { deckId },
-    data: { isDraft: false },
-  });
+  const { error: updateCardsError } = await supabase
+    .from("cards")
+    .update({ is_draft: false })
+    .eq("deck_id", deckId);
+  if (updateCardsError) throw new Error(updateCardsError.message);
 
-  const cardCount = await prisma.card.count({ where: { deckId, isDraft: false } });
+  const { count, error: countError } = await supabase
+    .from("cards")
+    .select("*", { count: "exact", head: true })
+    .eq("deck_id", deckId)
+    .eq("is_draft", false);
+  if (countError) throw new Error(countError.message);
 
-  const updated = await prisma.deck.update({
-    where: { id: deckId },
-    data: { cardCount },
-  });
+  const { data: updated, error } = await supabase
+    .from("decks")
+    .update({ card_count: count ?? 0 })
+    .eq("id", deckId)
+    .select()
+    .single();
+  if (error) throw new Error(error.message);
 
   revalidatePath(`/decks/${deckId}`);
-  revalidatePath("/dashboard");
+  revalidatePath("/");
   return updated;
 }
 
 export async function getDeckWithCards(deckId: string) {
-  const user = await getAuthUser();
+  const { supabase, user } = await getAuthUser();
 
-  const deck = await prisma.deck.findUnique({
-    where: { id: deckId },
-    include: {
-      cards: {
-        orderBy: { position: "asc" },
-      },
-    },
-  });
+  const { data: deck, error } = await supabase
+    .from("decks")
+    .select("*, cards(*)")
+    .eq("id", deckId)
+    .single();
+  if (error) throw new Error(error.message);
+  if (!deck || deck.owner_id !== user.id) throw new Error("Deck not found or unauthorized");
 
-  if (!deck || deck.ownerId !== user.id) throw new Error("Deck not found or unauthorized");
+  // Sort cards by position
+  if (deck.cards) {
+    deck.cards.sort((a: { position: number }, b: { position: number }) => a.position - b.position);
+  }
 
   return deck;
 }
