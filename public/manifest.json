@@ -1,0 +1,18 @@
+{
+  "name": "FinaLily",
+  "short_name": "FinaLily",
+  "description": "FinaLily, a study app that actually makes sense.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#7EC8E3",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "/logo.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
