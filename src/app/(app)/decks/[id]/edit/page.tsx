@@ -48,6 +48,22 @@ import { CSS } from "@dnd-kit/utilities";
 
 const CARD_TYPE_LABELS: Record<string, string> = {
   FLASHCARD: "Flashcard",
+  MCQ: "Multiple Choice",
+  IDENTIFICATION: "Identification",
+  TRUE_FALSE: "True / False",
+  CLOZE: "Fill in the Blank",
+};
+
+const CARD_TYPE_DESCRIPTIONS: Record<string, string> = {
+  FLASHCARD: "Flip to reveal the answer",
+  MCQ: "Pick the correct option",
+  IDENTIFICATION: "Type the answer",
+  TRUE_FALSE: "True or false statement",
+  CLOZE: "Fill in {{blanks}} in a sentence",
+};
+
+const CARD_TYPE_SHORT: Record<string, string> = {
+  FLASHCARD: "Flashcard",
   MCQ: "MCQ",
   IDENTIFICATION: "ID",
   TRUE_FALSE: "T/F",
@@ -89,10 +105,12 @@ function SortableCardItem({
   editPrompt,
   editAnswer,
   editExplanation,
+  editOptions,
   saving,
   setEditPrompt,
   setEditAnswer,
   setEditExplanation,
+  setEditOptions,
   onSaveCard,
   onCancelEdit,
   onStartEdit,
@@ -105,10 +123,12 @@ function SortableCardItem({
   editPrompt: string;
   editAnswer: string;
   editExplanation: string;
+  editOptions: string[];
   saving: boolean;
   setEditPrompt: (v: string) => void;
   setEditAnswer: (v: string) => void;
   setEditExplanation: (v: string) => void;
+  setEditOptions: (v: string[]) => void;
   onSaveCard: (id: string) => void;
   onCancelEdit: () => void;
   onStartEdit: (card: CardRow) => void;
@@ -149,13 +169,58 @@ function SortableCardItem({
               rows={2}
             />
           </div>
-          <div className="space-y-1">
-            <Label className="text-xs">Answer</Label>
-            <Input
-              value={editAnswer}
-              onChange={(e) => setEditAnswer(e.target.value)}
-            />
-          </div>
+          {card.type === "MCQ" ? (
+            <div className="space-y-2">
+              <Label className="text-xs">Options</Label>
+              {editOptions.map((opt, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-muted-foreground w-5">
+                    {String.fromCharCode(65 + i)}
+                  </span>
+                  <Input
+                    value={opt}
+                    onChange={(e) => {
+                      const next = [...editOptions];
+                      next[i] = e.target.value;
+                      setEditOptions(next);
+                    }}
+                    placeholder={`Option ${String.fromCharCode(65 + i)}`}
+                    className="flex-1"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setEditAnswer(opt)}
+                    className={cn(
+                      "shrink-0 text-xs px-2 py-1 rounded border transition-colors",
+                      editAnswer === opt && opt.trim()
+                        ? "bg-green-500/10 border-green-500 text-green-700 dark:text-green-400"
+                        : "border-border text-muted-foreground hover:bg-muted"
+                    )}
+                  >
+                    {editAnswer === opt && opt.trim() ? "Correct" : "Set correct"}
+                  </button>
+                </div>
+              ))}
+              {editOptions.length < 6 && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setEditOptions([...editOptions, ""])}
+                >
+                  <Plus className="h-3 w-3 mr-1" /> Add option
+                </Button>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-1">
+              <Label className="text-xs">Answer</Label>
+              <Input
+                value={editAnswer}
+                onChange={(e) => setEditAnswer(e.target.value)}
+              />
+            </div>
+          )}
           <div className="space-y-1">
             <Label className="text-xs">Explanation</Label>
             <Textarea
@@ -202,7 +267,7 @@ function SortableCardItem({
               CARD_TYPE_COLORS[card.type] ?? "bg-muted text-muted-foreground"
             )}
           >
-            {CARD_TYPE_LABELS[card.type] ?? card.type}
+            {CARD_TYPE_SHORT[card.type] ?? card.type}
           </span>
           <div className="flex-1 min-w-0">
             <p className="text-sm line-clamp-2">{card.prompt}</p>
@@ -276,6 +341,7 @@ export default function EditDeckPage() {
   const [editPrompt, setEditPrompt] = useState("");
   const [editAnswer, setEditAnswer] = useState("");
   const [editExplanation, setEditExplanation] = useState("");
+  const [editOptions, setEditOptions] = useState<string[]>(["", "", "", ""]);
 
   // New card form
   const [showNewCard, setShowNewCard] = useState(false);
@@ -283,6 +349,8 @@ export default function EditDeckPage() {
   const [newAnswer, setNewAnswer] = useState("");
   const [newExplanation, setNewExplanation] = useState("");
   const [newType, setNewType] = useState<"FLASHCARD" | "MCQ" | "IDENTIFICATION" | "TRUE_FALSE" | "CLOZE">("FLASHCARD");
+  const [newOptions, setNewOptions] = useState<string[]>(["", "", "", ""]);
+  const [newClozeText, setNewClozeText] = useState("");
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
@@ -331,19 +399,48 @@ export default function EditDeckPage() {
 
   function startEditCard(card: CardRow) {
     setEditingCardId(card.id);
-    setEditPrompt(card.prompt);
+    setEditPrompt(card.type === "CLOZE" && card.cloze_text ? card.cloze_text : card.prompt);
     setEditAnswer(card.answer);
     setEditExplanation(card.explanation ?? "");
+    if (card.type === "MCQ" && Array.isArray(card.options)) {
+      setEditOptions([...(card.options as string[])]);
+    } else {
+      setEditOptions(["", "", "", ""]);
+    }
   }
 
   async function handleSaveCard(cardId: string) {
     setSaving(true);
+    const card = cards.find((c) => c.id === cardId);
+    const isCloze = card?.type === "CLOZE";
+
+    // For cloze, extract blanks as the answer from the edited prompt (which contains {{blanks}})
+    const updateData: Parameters<typeof updateCard>[1] = {
+      prompt: isCloze ? editPrompt.replace(/\{\{([^}]+)\}\}/g, "___") : editPrompt.trim(),
+      answer: isCloze ? (() => {
+        const blanks: string[] = [];
+        const regex = /\{\{([^}]+)\}\}/g;
+        let m;
+        while ((m = regex.exec(editPrompt)) !== null) blanks.push(m[1].trim());
+        return blanks.join(", ");
+      })() : editAnswer.trim(),
+      explanation: editExplanation.trim() || undefined,
+    };
+    if (isCloze) {
+      updateData.clozeText = editPrompt.trim();
+    }
+    if (card?.type === "MCQ") {
+      const filteredOptions = editOptions.filter((o) => o.trim());
+      if (!filteredOptions.includes(editAnswer.trim())) {
+        toast.error("The correct answer must be one of the options");
+        setSaving(false);
+        return;
+      }
+      updateData.options = filteredOptions;
+    }
+
     try {
-      await updateCard(cardId, {
-        prompt: editPrompt.trim(),
-        answer: editAnswer.trim(),
-        explanation: editExplanation.trim() || undefined,
-      });
+      await updateCard(cardId, updateData);
       setEditingCardId(null);
       await loadDeck();
       toast.success("Card saved");
@@ -382,19 +479,53 @@ export default function EditDeckPage() {
 
   async function handleAddCard(e: React.FormEvent) {
     e.preventDefault();
-    if (!newPrompt.trim() || !newAnswer.trim()) return;
+    if (!newPrompt.trim() && newType !== "CLOZE") return;
+    if (newType === "CLOZE" && !newClozeText.trim()) return;
+
+    // Validate type-specific requirements
+    if (newType === "MCQ") {
+      const filledOptions = newOptions.filter((o) => o.trim());
+      if (filledOptions.length < 2) return;
+      if (!newAnswer.trim()) return;
+    } else if (newType !== "CLOZE" && !newAnswer.trim()) {
+      return;
+    }
+
     setSaving(true);
     try {
-      await createCard({
+      // For cloze, extract blanks as the answer
+      let clozeAnswer = "";
+      if (newType === "CLOZE") {
+        const blanks: string[] = [];
+        const regex = /\{\{([^}]+)\}\}/g;
+        let match;
+        while ((match = regex.exec(newClozeText)) !== null) {
+          blanks.push(match[1].trim());
+        }
+        clozeAnswer = blanks.join(", ");
+      }
+
+      const cardData: Parameters<typeof createCard>[0] = {
         deckId,
         type: newType,
-        prompt: newPrompt.trim(),
-        answer: newAnswer.trim(),
+        prompt: newType === "CLOZE" ? newClozeText.replace(/\{\{([^}]+)\}\}/g, "___") : newPrompt.trim(),
+        answer: newType === "CLOZE" ? clozeAnswer : newType === "TRUE_FALSE" ? newAnswer : newAnswer.trim(),
         explanation: newExplanation.trim() || undefined,
-      });
+      };
+
+      if (newType === "MCQ") {
+        cardData.options = newOptions.filter((o) => o.trim());
+      }
+      if (newType === "CLOZE") {
+        cardData.clozeText = newClozeText.trim();
+      }
+
+      await createCard(cardData);
       setNewPrompt("");
       setNewAnswer("");
       setNewExplanation("");
+      setNewOptions(["", "", "", ""]);
+      setNewClozeText("");
       setShowNewCard(false);
       await loadDeck();
       toast.success("Card added");
@@ -530,43 +661,164 @@ export default function EditDeckPage() {
             <form onSubmit={handleAddCard} className="space-y-4">
               <div className="space-y-2">
                 <Label>Card Type</Label>
-                <div className="flex flex-wrap gap-2">
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                   {(Object.entries(CARD_TYPE_LABELS) as [string, string][]).map(([id, label]) => (
                     <button
                       key={id}
                       type="button"
-                      onClick={() => setNewType(id as typeof newType)}
+                      onClick={() => {
+                        setNewType(id as typeof newType);
+                        setNewAnswer("");
+                        setNewPrompt("");
+                        setNewOptions(["", "", "", ""]);
+                        setNewClozeText("");
+                      }}
                       className={cn(
-                        "text-xs px-3 py-1.5 rounded-full border transition-colors",
+                        "flex flex-col items-start rounded-lg border p-3 text-left transition-colors",
                         newType === id
-                          ? "bg-primary text-primary-foreground border-primary"
+                          ? "border-primary bg-primary/5 ring-1 ring-primary"
                           : "border-border hover:bg-muted"
                       )}
                     >
-                      {label}
+                      <span className="text-sm font-medium">{label}</span>
+                      <span className="text-xs text-muted-foreground">{CARD_TYPE_DESCRIPTIONS[id]}</span>
                     </button>
                   ))}
                 </div>
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="new-prompt">Question / Prompt</Label>
-                <Textarea
-                  id="new-prompt"
-                  value={newPrompt}
-                  onChange={(e) => setNewPrompt(e.target.value)}
-                  rows={2}
-                  required
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="new-answer">Answer</Label>
-                <Input
-                  id="new-answer"
-                  value={newAnswer}
-                  onChange={(e) => setNewAnswer(e.target.value)}
-                  required
-                />
-              </div>
+
+              {/* CLOZE: special text input with blanks */}
+              {newType === "CLOZE" ? (
+                <div className="space-y-2">
+                  <Label htmlFor="new-cloze">Sentence with blanks</Label>
+                  <Textarea
+                    id="new-cloze"
+                    value={newClozeText}
+                    onChange={(e) => setNewClozeText(e.target.value)}
+                    rows={3}
+                    required
+                    placeholder='Use {{double braces}} for blanks. e.g. "The {{mitochondria}} is the powerhouse of the cell"'
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Wrap answers in {"{{braces}}"} — they become the blanks students fill in.
+                  </p>
+                </div>
+              ) : (
+                <>
+                  {/* Prompt / Question */}
+                  <div className="space-y-2">
+                    <Label htmlFor="new-prompt">
+                      {newType === "TRUE_FALSE" ? "Statement" : "Question / Prompt"}
+                    </Label>
+                    <Textarea
+                      id="new-prompt"
+                      value={newPrompt}
+                      onChange={(e) => setNewPrompt(e.target.value)}
+                      rows={2}
+                      required
+                      placeholder={
+                        newType === "TRUE_FALSE"
+                          ? "Enter a true or false statement..."
+                          : newType === "MCQ"
+                          ? "Enter the question..."
+                          : "Enter the prompt..."
+                      }
+                    />
+                  </div>
+
+                  {/* MCQ: Options */}
+                  {newType === "MCQ" && (
+                    <div className="space-y-2">
+                      <Label>Options</Label>
+                      {newOptions.map((opt, i) => (
+                        <div key={i} className="flex items-center gap-2">
+                          <span className="text-sm font-bold text-muted-foreground w-6">
+                            {String.fromCharCode(65 + i)}
+                          </span>
+                          <Input
+                            value={opt}
+                            onChange={(e) => {
+                              const next = [...newOptions];
+                              next[i] = e.target.value;
+                              setNewOptions(next);
+                            }}
+                            placeholder={`Option ${String.fromCharCode(65 + i)}`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setNewAnswer(opt)}
+                            className={cn(
+                              "shrink-0 text-xs px-2 py-1 rounded border transition-colors",
+                              newAnswer === opt && opt.trim()
+                                ? "bg-green-500/10 border-green-500 text-green-700 dark:text-green-400"
+                                : "border-border text-muted-foreground hover:bg-muted"
+                            )}
+                          >
+                            {newAnswer === opt && opt.trim() ? "Correct" : "Set correct"}
+                          </button>
+                        </div>
+                      ))}
+                      {newOptions.length < 6 && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => setNewOptions([...newOptions, ""])}
+                        >
+                          <Plus className="h-3 w-3 mr-1" /> Add option
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
+                  {/* TRUE_FALSE: toggle */}
+                  {newType === "TRUE_FALSE" && (
+                    <div className="space-y-2">
+                      <Label>Correct Answer</Label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setNewAnswer("true")}
+                          className={cn(
+                            "flex-1 rounded-lg border py-3 text-sm font-medium transition-colors",
+                            newAnswer === "true"
+                              ? "border-green-500 bg-green-500/10 text-green-700 dark:text-green-400"
+                              : "border-border hover:bg-muted"
+                          )}
+                        >
+                          True
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setNewAnswer("false")}
+                          className={cn(
+                            "flex-1 rounded-lg border py-3 text-sm font-medium transition-colors",
+                            newAnswer === "false"
+                              ? "border-destructive bg-destructive/10 text-destructive"
+                              : "border-border hover:bg-muted"
+                          )}
+                        >
+                          False
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* FLASHCARD / IDENTIFICATION: text answer */}
+                  {(newType === "FLASHCARD" || newType === "IDENTIFICATION") && (
+                    <div className="space-y-2">
+                      <Label htmlFor="new-answer">Answer</Label>
+                      <Input
+                        id="new-answer"
+                        value={newAnswer}
+                        onChange={(e) => setNewAnswer(e.target.value)}
+                        required
+                      />
+                    </div>
+                  )}
+                </>
+              )}
+
               <div className="space-y-2">
                 <Label htmlFor="new-explanation">Explanation (optional)</Label>
                 <Textarea
@@ -611,10 +863,12 @@ export default function EditDeckPage() {
                 editPrompt={editPrompt}
                 editAnswer={editAnswer}
                 editExplanation={editExplanation}
+                editOptions={editOptions}
                 saving={saving}
                 setEditPrompt={setEditPrompt}
                 setEditAnswer={setEditAnswer}
                 setEditExplanation={setEditExplanation}
+                setEditOptions={setEditOptions}
                 onSaveCard={handleSaveCard}
                 onCancelEdit={() => setEditingCardId(null)}
                 onStartEdit={startEditCard}
