@@ -55,7 +55,7 @@ export default async function SharePage({ params }: PageProps) {
           <div className="grid grid-cols-3 gap-4 text-center">
             <div>
               <BookOpen className="size-5 text-muted-foreground mx-auto mb-1" />
-              <p className="text-lg font-semibold">{deck.cardCount}</p>
+              <p className="text-lg font-semibold">{deck.card_count}</p>
               <p className="text-xs text-muted-foreground">cards</p>
             </div>
             <div>
@@ -66,7 +66,7 @@ export default async function SharePage({ params }: PageProps) {
             <div>
               <LayersIcon className="size-5 text-muted-foreground mx-auto mb-1" />
               <p className="text-sm font-medium truncate">
-                {creator.displayName ?? "Anonymous"}
+                {creator.display_name ?? "Anonymous"}
               </p>
               <p className="text-xs text-muted-foreground">creator</p>
             </div>
