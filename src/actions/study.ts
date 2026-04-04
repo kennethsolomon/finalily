@@ -25,6 +25,7 @@ export async function startSession(data: {
 
   const deck = await prisma.deck.findUnique({ where: { id: data.deckId } });
   if (!deck) throw new Error("Deck not found");
+  if (deck.ownerId !== user.id) throw new Error("Unauthorized");
 
   let cards;
   const now = new Date();
@@ -58,11 +59,13 @@ export async function startSession(data: {
 
     cards = [...scheduled, ...unscheduled].slice(0, 20);
   } else if (data.mode === "QUIZ") {
-    const allCards = await prisma.card.findMany({
+    cards = await prisma.card.findMany({
       where: { deckId: data.deckId, isDraft: false },
+      take: 20,
+      orderBy: { position: "asc" },
     });
-    // Shuffle and take 20
-    cards = allCards.sort(() => Math.random() - 0.5).slice(0, 20);
+    // Shuffle in memory (limited to 20)
+    cards = cards.sort(() => Math.random() - 0.5);
   } else {
     // TEST: all non-draft cards in order
     cards = await prisma.card.findMany({
@@ -97,6 +100,10 @@ export async function submitAnswer(data: {
     where: { id: data.sessionId },
   });
   if (!session || session.userId !== user.id) throw new Error("Session not found or unauthorized");
+
+  // Verify card belongs to the session's deck
+  const card = await prisma.card.findUnique({ where: { id: data.cardId } });
+  if (!card || card.deckId !== session.deckId) throw new Error("Card does not belong to this session's deck");
 
   const answer = await prisma.sessionAnswer.create({
     data: {

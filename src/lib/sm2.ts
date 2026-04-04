@@ -70,8 +70,8 @@ export function sm2(input: SM2Input): SM2Result {
 export function ratingToQuality(rating: "again" | "hard" | "good" | "easy"): number {
   switch (rating) {
     case "again": return 1;
-    case "hard": return 2;
-    case "good": return 3;
+    case "hard": return 3;
+    case "good": return 4;
     case "easy": return 5;
   }
 }

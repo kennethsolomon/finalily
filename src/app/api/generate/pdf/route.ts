@@ -74,40 +74,24 @@ export async function POST(req: NextRequest) {
     return new Response(JSON.stringify({ error: "file and deckId are required" }), { status: 400 });
   }
 
-  if (file.type !== "application/pdf") {
-    return new Response(JSON.stringify({ error: "File must be a PDF" }), { status: 400 });
-  }
-
   if (file.size > MAX_FILE_SIZE) {
     return new Response(JSON.stringify({ error: "File exceeds 20 MB limit" }), { status: 400 });
+  }
+
+  // Validate PDF magic bytes (more reliable than file.type)
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  if (buffer.length < 5 || buffer.subarray(0, 5).toString() !== "%PDF-") {
+    return new Response(JSON.stringify({ error: "File must be a valid PDF" }), { status: 400 });
   }
 
   // Validate deck ownership
   const deck = await prisma.deck.findUnique({ where: { id: deckId } });
   if (!deck || deck.ownerId !== user.id) {
-    return new Response(JSON.stringify({ error: "Deck not found or unauthorized" }), { status: 400 });
+    return new Response(JSON.stringify({ error: "Deck not found or unauthorized" }), { status: 403 });
   }
 
-  // Upload to Supabase Storage
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-  const filename = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-
-  const { error: uploadError } = await supabase.storage
-    .from("pdfs")
-    .upload(`${user.id}/${filename}`, buffer, {
-      contentType: "application/pdf",
-      upsert: false,
-    });
-
-  if (uploadError) {
-    return new Response(
-      JSON.stringify({ error: `Storage upload failed: ${uploadError.message}` }),
-      { status: 500 }
-    );
-  }
-
-  // Extract text
+  // Extract text BEFORE uploading to storage (avoid orphan uploads on parse failure)
   let parsed: { text: string; numpages: number };
   try {
     parsed = await parsePdf(buffer);
@@ -130,6 +114,23 @@ export async function POST(req: NextRequest) {
     return new Response(
       JSON.stringify({ error: "No text could be extracted from this PDF" }),
       { status: 422 }
+    );
+  }
+
+  // Upload to storage only after successful extraction
+  const filename = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+
+  const { error: uploadError } = await supabase.storage
+    .from("pdfs")
+    .upload(`${user.id}/${filename}`, buffer, {
+      contentType: "application/pdf",
+      upsert: false,
+    });
+
+  if (uploadError) {
+    return new Response(
+      JSON.stringify({ error: `Storage upload failed: ${uploadError.message}` }),
+      { status: 500 }
     );
   }
 
@@ -170,41 +171,48 @@ export async function POST(req: NextRequest) {
             .map((l: string) => l.trim())
             .filter((l: string) => l.startsWith("{"));
 
-          const createdCards: string[] = [];
+          const validCards: { type: string; prompt: string; answer: string; explanation: string | null }[] = [];
 
           for (const line of rawLines) {
             try {
-              const parsed = JSON.parse(line) as {
+              const cardData = JSON.parse(line) as {
                 type: string;
                 prompt: string;
                 answer: string;
                 explanation?: string;
               };
-
-              const card = await prisma.card.create({
-                data: {
-                  deckId,
-                  type: parsed.type as "FLASHCARD" | "MCQ" | "IDENTIFICATION" | "TRUE_FALSE" | "CLOZE",
-                  prompt: parsed.prompt,
-                  answer: parsed.answer,
-                  explanation: parsed.explanation ?? null,
-                  sourceChunkId: sourceDoc.id,
-                  position: totalCreated,
-                  isDraft: true,
-                },
+              validCards.push({
+                type: cardData.type,
+                prompt: cardData.prompt,
+                answer: cardData.answer,
+                explanation: cardData.explanation ?? null,
               });
-
-              totalCreated++;
-              createdCards.push(card.id);
             } catch {
               // skip malformed card lines
             }
           }
 
+          // Batch insert all valid cards for this chunk
+          if (validCards.length > 0) {
+            await prisma.card.createMany({
+              data: validCards.map((c, idx) => ({
+                deckId: deckId!,
+                type: c.type as "FLASHCARD" | "MCQ" | "IDENTIFICATION" | "TRUE_FALSE" | "CLOZE",
+                prompt: c.prompt,
+                answer: c.answer,
+                explanation: c.explanation,
+                sourceChunkId: sourceDoc.id,
+                position: totalCreated + idx,
+                isDraft: true,
+              })),
+            });
+            totalCreated += validCards.length;
+          }
+
           const event = JSON.stringify({
             chunk: i + 1,
             total: chunks.length,
-            cardsCreated: createdCards.length,
+            cardsCreated: validCards.length,
           });
           controller.enqueue(encoder.encode(event + "\n"));
         } catch (aiError) {
