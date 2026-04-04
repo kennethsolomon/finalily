@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { toast } from "sonner";
 import { completeOnboarding } from "@/actions/profile";
 import {
   FlaskConical,
@@ -15,6 +16,7 @@ import {
   BookOpen,
   Languages,
   MonitorDot,
+  Brain,
   MoreHorizontal,
   CheckCircle2,
 } from "lucide-react";
@@ -27,6 +29,7 @@ const SUBJECTS = [
   { id: "History", label: "History", icon: BookOpen },
   { id: "Language", label: "Language", icon: Languages },
   { id: "Computer Science", label: "Computer Science", icon: MonitorDot },
+  { id: "Psychology", label: "Psychology", icon: Brain },
   { id: "Other", label: "Other", icon: MoreHorizontal },
 ];
 
@@ -52,6 +55,8 @@ export default function OnboardingPage() {
     try {
       await completeOnboarding({ subjects, weeklyGoal });
       router.push("/decks/new");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Setup failed. Please try again.");
     } finally {
       setLoading(false);
     }

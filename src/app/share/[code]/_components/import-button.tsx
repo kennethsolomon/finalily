@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
+import { toast } from "sonner";
 import { importSharedDeck } from "@/actions/share";
 import { Download } from "lucide-react";
 
@@ -31,9 +32,12 @@ export function ImportButton({ code }: ImportButtonProps) {
 
     try {
       const newDeck = await importSharedDeck(code);
+      toast.success("Deck imported!");
       router.push(`/decks/${newDeck.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Import failed. Please try again.");
+      const msg = err instanceof Error ? err.message : "Import failed. Please try again.";
+      toast.error(msg);
+      setError(msg);
       setLoading(false);
     }
   }

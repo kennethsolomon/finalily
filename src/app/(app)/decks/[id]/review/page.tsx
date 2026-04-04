@@ -25,6 +25,7 @@ import {
   BookOpen,
   Loader2,
 } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { publishCard, updateCard, deleteCard } from "@/actions/cards";
 import { publishDeck } from "@/actions/decks";
@@ -131,7 +132,10 @@ export default function ReviewPage() {
     setActionLoading(true);
     try {
       await publishCard(currentCard.id);
+      toast.success("Card accepted");
       advance(currentCard.id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to accept card");
     } finally {
       setActionLoading(false);
     }
@@ -152,6 +156,9 @@ export default function ReviewPage() {
         )
       );
       setEditing(false);
+      toast.success("Card updated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save card");
     } finally {
       setActionLoading(false);
     }
@@ -171,6 +178,9 @@ export default function ReviewPage() {
       setCards((prev) =>
         prev.map((c) => (c.id === currentCard.id ? { ...c, ...updated } : c))
       );
+      toast.success("Card regenerated");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Regeneration failed");
     } finally {
       setActionLoading(false);
     }
@@ -181,7 +191,10 @@ export default function ReviewPage() {
     setActionLoading(true);
     try {
       await deleteCard(currentCard.id);
+      toast.success("Card removed");
       advance(currentCard.id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to remove card");
     } finally {
       setActionLoading(false);
     }
@@ -197,6 +210,9 @@ export default function ReviewPage() {
           c.id === currentCard.id ? { ...c, ...updated } : c
         )
       );
+      toast.success(`Changed to ${CARD_TYPE_LABELS[newType]}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to change type");
     } finally {
       setActionLoading(false);
     }
@@ -206,7 +222,10 @@ export default function ReviewPage() {
     setActionLoading(true);
     try {
       await publishDeck(deckId);
+      toast.success("All cards published!");
       router.push(`/decks/${deckId}/study`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to publish deck");
     } finally {
       setActionLoading(false);
     }

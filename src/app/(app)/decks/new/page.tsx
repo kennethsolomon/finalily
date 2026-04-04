@@ -17,8 +17,10 @@ import {
 } from "@/components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sparkles, Upload, Pencil, ArrowLeft } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { createDeck } from "@/actions/decks";
+import { GenerationLoading } from "@/components/generation-loading";
 
 type Mode = "choose" | "topic" | "pdf" | "manual";
 
@@ -94,9 +96,12 @@ export default function NewDeckPage() {
           if (done) break;
         }
       }
+      toast.success("Cards generated! Redirecting to review...");
       router.push(`/decks/${deck.id}/review`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      const msg = err instanceof Error ? err.message : "Something went wrong";
+      toast.error("Generation failed", { description: msg });
+      setError(msg);
       setLoading(false);
     }
   }
@@ -128,9 +133,12 @@ export default function NewDeckPage() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? "Generation failed");
       }
+      toast.success("PDF processed! Redirecting to review...");
       router.push(`/decks/${deck.id}/review`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      const msg = err instanceof Error ? err.message : "Something went wrong";
+      toast.error("Generation failed", { description: msg });
+      setError(msg);
       setLoading(false);
     }
   }
@@ -147,9 +155,12 @@ export default function NewDeckPage() {
         description: manualDescription.trim() || undefined,
         sourceType: "MANUAL",
       });
+      toast.success("Deck created!");
       router.push(`/decks/${deck.id}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+      const msg = err instanceof Error ? err.message : "Something went wrong";
+      toast.error("Failed to create deck", { description: msg });
+      setError(msg);
       setLoading(false);
     }
   }
@@ -239,7 +250,11 @@ export default function NewDeckPage() {
         </div>
       )}
 
-      {(mode === "topic" || mode === "pdf") && (
+      {loading && (mode === "topic" || mode === "pdf") && (
+        <GenerationLoading />
+      )}
+
+      {(mode === "topic" || mode === "pdf") && !loading && (
         <form
           onSubmit={mode === "topic" ? handleTopicSubmit : handlePdfSubmit}
           className="space-y-4"

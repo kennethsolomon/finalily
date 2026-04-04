@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { deleteDeck } from "@/actions/decks";
 
 export function DeleteDeckButton({ deckId }: { deckId: string }) {
@@ -21,8 +22,10 @@ export function DeleteDeckButton({ deckId }: { deckId: string }) {
     setLoading(true);
     try {
       await deleteDeck(deckId);
+      toast.success("Deck deleted");
       router.push("/decks");
-    } catch {
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to delete deck");
       setLoading(false);
     }
   }

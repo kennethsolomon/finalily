@@ -123,8 +123,21 @@
   50% { transform: translateY(-4px); }
 }
 
+@keyframes mascot-thinking {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  25% { transform: translateY(-6px) rotate(-3deg); }
+  75% { transform: translateY(-6px) rotate(3deg); }
+}
+
+@keyframes mascot-pulse-glow {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(0.7 0.15 250 / 0); }
+  50% { box-shadow: 0 0 20px 8px oklch(0.7 0.15 250 / 0.3); }
+}
+
 @theme inline {
   --animate-mascot-idle: mascot-idle 3s ease-in-out infinite;
+  --animate-mascot-thinking: mascot-thinking 1.5s ease-in-out infinite;
+  --animate-mascot-pulse-glow: mascot-pulse-glow 2s ease-in-out infinite;
 }
 
 /* ── Theme: Pixel Pastel (default) ── */

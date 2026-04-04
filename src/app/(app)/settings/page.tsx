@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { updateProfile } from "@/actions/profile";
 import { ThemePicker } from "@/components/theme-picker";
@@ -45,8 +46,6 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [changingPassword, setChangingPassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
-  const [passwordMsg, setPasswordMsg] = useState("");
-  const [saveMsg, setSaveMsg] = useState("");
 
   useEffect(() => {
     async function load() {
@@ -79,12 +78,11 @@ export default function SettingsPage() {
 
   async function handleSave() {
     setSaving(true);
-    setSaveMsg("");
     try {
       await updateProfile({ displayName, weeklyGoal, subjects: selectedSubjects });
-      setSaveMsg("Changes saved.");
+      toast.success("Changes saved");
     } catch {
-      setSaveMsg("Failed to save changes.");
+      toast.error("Failed to save changes");
     } finally {
       setSaving(false);
     }
@@ -93,12 +91,15 @@ export default function SettingsPage() {
   async function handleChangePassword() {
     if (!newPassword) return;
     setChangingPassword(true);
-    setPasswordMsg("");
     const supabase = createClient();
     const { error } = await supabase.auth.updateUser({ password: newPassword });
     setChangingPassword(false);
     setNewPassword("");
-    setPasswordMsg(error ? error.message : "Password updated.");
+    if (error) {
+      toast.error("Failed to update password", { description: error.message });
+    } else {
+      toast.success("Password updated");
+    }
   }
 
   async function handleSignOut() {
@@ -237,7 +238,6 @@ export default function SettingsPage() {
         >
           {saving ? "Saving…" : "Save changes"}
         </button>
-        {saveMsg && <p className="text-sm text-muted-foreground">{saveMsg}</p>}
       </div>
 
       {/* Account */}
@@ -264,7 +264,6 @@ export default function SettingsPage() {
               {changingPassword ? "Updating…" : "Update"}
             </button>
           </div>
-          {passwordMsg && <p className="text-sm text-muted-foreground">{passwordMsg}</p>}
         </div>
 
         <button
