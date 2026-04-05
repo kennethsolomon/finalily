@@ -28,6 +28,7 @@ export async function POST(req: NextRequest) {
     difficulty: string;
     cardCount: number;
     typeMix: string[];
+    aiInstructions?: string;
   };
 
   try {
@@ -37,6 +38,7 @@ export async function POST(req: NextRequest) {
   }
 
   const { deckId, topic, difficulty, cardCount, typeMix } = body;
+  const aiInstructions = body.aiInstructions?.slice(0, 1000) || undefined;
 
   if (!deckId || !topic || !cardCount || !typeMix?.length) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
@@ -75,6 +77,7 @@ export async function POST(req: NextRequest) {
   const systemPrompt =
     `You are a study card generator. Generate exactly ${cardCount} study cards about "${sanitizedTopic}" at ${difficulty} difficulty. ` +
     `Generate cards in these types: ${typeDesc}. ` +
+    (aiInstructions ? `Special instructions: ${aiInstructions}. ` : "") +
     `Return a JSON array. Each element must have: type (one of ${typeMix.join(", ")}), prompt, answer, explanation. ` +
     `MCQ cards must also have options (array of 4 strings). CLOZE cards must also have clozeText (the sentence with blanks wrapped in double curly braces like {{answer}}, e.g. "The {{mitochondria}} is the powerhouse of the cell"). ` +
     `Return ONLY the JSON array, no other text. ` +

@@ -19,7 +19,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Sparkles, Upload, Pencil, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { createDeck } from "@/actions/decks";
+import { createDeck, deleteDeck } from "@/actions/decks";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { GenerationLoading } from "@/components/generation-loading";
 
 type Mode = "choose" | "topic" | "pdf" | "manual";
@@ -30,6 +31,34 @@ const CARD_TYPES = [
   { id: "IDENTIFICATION", label: "Identification" },
   { id: "TRUE_FALSE", label: "True / False" },
   { id: "CLOZE", label: "Fill-in-the-Blank" },
+];
+
+const AI_INSTRUCTION_PRESETS = [
+  {
+    id: "balanced",
+    label: "Balanced Coverage",
+    text: "Distribute questions evenly across all topics and subtopics in the material. Do not focus heavily on any single section.",
+  },
+  {
+    id: "definitions",
+    label: "Key Definitions",
+    text: "Focus on key terms, definitions, and vocabulary. Create questions that test understanding of important concepts and terminology.",
+  },
+  {
+    id: "application",
+    label: "Application & Analysis",
+    text: "Create higher-order thinking questions that test application, analysis, and critical thinking rather than simple recall.",
+  },
+  {
+    id: "exam",
+    label: "Exam Prep",
+    text: "Generate questions similar to what would appear on an exam. Mix difficulty levels and cover the most testable material.",
+  },
+  {
+    id: "quick",
+    label: "Quick Review",
+    text: "Focus on the most important facts and core concepts for a quick review session.",
+  },
 ];
 
 export default function NewDeckPage() {
@@ -44,8 +73,14 @@ export default function NewDeckPage() {
   const [cardCount, setCardCount] = useState(15);
   const [typeMix, setTypeMix] = useState<string[]>(["FLASHCARD", "MCQ"]);
 
+  // AI Instructions state
+  const [aiInstructions, setAiInstructions] = useState("");
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
+
   // PDF state
   const [file, setFile] = useState<File | null>(null);
+  const [pageFrom, setPageFrom] = useState("");
+  const [pageTo, setPageTo] = useState("");
 
   // Manual form state
   const [manualTitle, setManualTitle] = useState("");
@@ -62,17 +97,33 @@ export default function NewDeckPage() {
     );
   }
 
+  function togglePreset(presetId: string) {
+    const preset = AI_INSTRUCTION_PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
+
+    if (selectedPreset === presetId && aiInstructions === preset.text) {
+      // Toggle off: only clear if user hasn't modified the text
+      setSelectedPreset(null);
+      setAiInstructions("");
+    } else {
+      setSelectedPreset(presetId);
+      setAiInstructions(preset.text);
+    }
+  }
+
   async function handleTopicSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     if (!topic.trim()) return;
     setLoading(true);
+    let createdDeckId: string | null = null;
     try {
       const deck = await createDeck({
         title: topic.trim(),
         subject: topic.trim(),
         sourceType: "TOPIC",
       });
+      createdDeckId = deck.id;
       const res = await fetch("/api/generate/topic", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -82,23 +133,51 @@ export default function NewDeckPage() {
           difficulty,
           cardCount,
           typeMix,
+          ...(aiInstructions.trim() && { aiInstructions: aiInstructions.trim() }),
         }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? "Generation failed");
       }
-      // consume stream
+      // Consume NDJSON stream and validate card creation
       const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let cardIds: string[] = [];
+      let streamError: string | null = null;
       if (reader) {
+        let buffer = "";
         while (true) {
-          const { done } = await reader.read();
+          const { done, value } = await reader.read();
           if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const event = JSON.parse(line);
+              if (event.type === "error" || event.error) {
+                streamError = event.error ?? "Generation error";
+              }
+              if (event.type === "done" && event.cardIds) {
+                cardIds = event.cardIds;
+              }
+            } catch {
+              // skip malformed NDJSON lines
+            }
+          }
         }
       }
+      if (streamError) throw new Error(streamError);
+      if (cardIds.length === 0) throw new Error("No cards were generated. Try a different topic or card types.");
       toast.success("Cards generated! Redirecting to review...");
       router.push(`/decks/${deck.id}/review`);
     } catch (err) {
+      // Clean up orphaned deck if it was created before the failure
+      if (createdDeckId) {
+        await deleteDeck(createdDeckId).catch(() => {});
+      }
       const msg = err instanceof Error ? err.message : "Something went wrong";
       toast.error("Generation failed", { description: msg });
       setError(msg);
@@ -111,31 +190,94 @@ export default function NewDeckPage() {
     setError(null);
     if (!file || !topic.trim()) return;
     setLoading(true);
+    let createdDeckId: string | null = null;
+    let uploadedStoragePath: string | null = null;
+    let supabase: ReturnType<typeof createBrowserClient> | null = null;
     try {
+      // Upload PDF directly to Supabase Storage (bypasses Next.js body limit)
+      supabase = createBrowserClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      const filename = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
+      const storagePath = `${user.id}/${filename}`;
+
+      const { error: uploadError } = await supabase.storage
+        .from("pdfs")
+        .upload(storagePath, file, { contentType: "application/pdf", upsert: false });
+
+      if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
+      uploadedStoragePath = storagePath;
+
       const deck = await createDeck({
         title: topic.trim(),
         subject: topic.trim(),
         sourceType: "PDF",
       });
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("deckId", deck.id);
-      formData.append("topic", topic.trim());
-      formData.append("difficulty", difficulty);
-      formData.append("cardCount", String(cardCount));
-      formData.append("typeMix", JSON.stringify(typeMix));
+      createdDeckId = deck.id;
 
+      // Call API with JSON body (small payload — PDF is already in storage)
       const res = await fetch("/api/generate/pdf", {
         method: "POST",
-        body: formData,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          deckId: deck.id,
+          storagePath,
+          originalFilename: file.name,
+          difficulty,
+          cardCount,
+          typeMix,
+          pageFrom: pageFrom ? Number(pageFrom) : undefined,
+          pageTo: pageTo ? Number(pageTo) : undefined,
+          ...(aiInstructions.trim() && { aiInstructions: aiInstructions.trim() }),
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? "Generation failed");
       }
-      toast.success("PDF processed! Redirecting to review...");
+      // Consume NDJSON stream and wait for card creation to complete
+      const reader = res.body?.getReader();
+      const decoder = new TextDecoder();
+      let totalCards = 0;
+      let streamError: string | null = null;
+      if (reader) {
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const event = JSON.parse(line);
+              if (event.error) {
+                streamError = event.error;
+              }
+              if (event.done && event.totalCards != null) {
+                totalCards = event.totalCards;
+              }
+            } catch {
+              // skip malformed NDJSON lines
+            }
+          }
+        }
+      }
+      if (streamError && totalCards === 0) throw new Error(streamError);
+      if (totalCards === 0) throw new Error("No cards were generated from this PDF. The content may not be extractable.");
+      toast.success(`${totalCards} cards generated! Redirecting to review...`);
       router.push(`/decks/${deck.id}/review`);
     } catch (err) {
+      // Clean up orphaned deck if it was created before the failure
+      if (createdDeckId) {
+        await deleteDeck(createdDeckId).catch(() => {});
+      }
+      // Clean up uploaded PDF from storage if the generation failed
+      if (uploadedStoragePath && supabase) {
+        await supabase.storage.from("pdfs").remove([uploadedStoragePath]).catch(() => {});
+      }
       const msg = err instanceof Error ? err.message : "Something went wrong";
       toast.error("Generation failed", { description: msg });
       setError(msg);
@@ -287,8 +429,76 @@ export default function NewDeckPage() {
                   </p>
                 )}
               </div>
+
+              {file && (
+                <div className="mt-3 space-y-2">
+                  <Label className="text-xs text-muted-foreground">
+                    Page range (optional — leave empty to use all pages, max {300})
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="number"
+                      min={1}
+                      placeholder="From"
+                      value={pageFrom}
+                      onChange={(e) => setPageFrom(e.target.value)}
+                      className="w-24"
+                    />
+                    <span className="text-muted-foreground text-sm">to</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      placeholder="To"
+                      value={pageTo}
+                      onChange={(e) => setPageTo(e.target.value)}
+                      className="w-24"
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           )}
+
+          <div className="space-y-2">
+            <div>
+              <Label>AI Instructions</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Guide how questions are generated
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {AI_INSTRUCTION_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => togglePreset(p.id)}
+                  className={cn(
+                    "text-xs px-3 py-1.5 rounded-full border transition-colors",
+                    selectedPreset === p.id
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "border-border hover:bg-muted"
+                  )}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <Textarea
+              placeholder="e.g. Cover all topics evenly, focus on definitions, mix question styles..."
+              value={aiInstructions}
+              onChange={(e) => {
+                setAiInstructions(e.target.value);
+                // Deselect preset if user modifies text away from preset value
+                if (selectedPreset) {
+                  const preset = AI_INSTRUCTION_PRESETS.find((p) => p.id === selectedPreset);
+                  if (preset && e.target.value !== preset.text) {
+                    setSelectedPreset(null);
+                  }
+                }
+              }}
+              rows={3}
+            />
+          </div>
 
           <div className="space-y-2">
             <Label htmlFor="topic">
