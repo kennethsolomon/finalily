@@ -1,22 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
-
-async function getAuthUser() {
-  const supabase = await createClient();
-  const { data: { user }, error } = await supabase.auth.getUser();
-  if (error || !user) throw new Error("Unauthorized");
-
-  const { data: dbUser, error: userError } = await supabase
-    .from("users")
-    .select("*")
-    .eq("id", user.id)
-    .single();
-  if (userError || !dbUser) throw new Error("User not found");
-
-  return { supabase, user: dbUser };
-}
+import { getAuthUser } from "@/lib/auth";
+import { narrowJoin, type DeckOwner } from "@/lib/supabase/types";
 
 export async function createCard(data: {
   deckId: string;
@@ -99,7 +85,7 @@ export async function updateCard(
     .single();
   if (cardError || !card) throw new Error("Card not found or unauthorized");
 
-  const deck = card.decks as unknown as { owner_id: string } | null;
+  const deck = narrowJoin<DeckOwner>(card.decks);
   if (!deck || deck.owner_id !== user.id) throw new Error("Card not found or unauthorized");
 
   const updatePayload: Record<string, unknown> = {};
@@ -133,11 +119,22 @@ export async function deleteCard(cardId: string) {
     .single();
   if (cardError || !card) throw new Error("Card not found or unauthorized");
 
-  const deck = card.decks as unknown as { owner_id: string } | null;
+  const deck = narrowJoin<DeckOwner>(card.decks);
   if (!deck || deck.owner_id !== user.id) throw new Error("Card not found or unauthorized");
 
   const { error } = await supabase.from("cards").delete().eq("id", cardId);
   if (error) throw new Error(error.message);
+
+  // Sync card_count on the deck
+  const { count } = await supabase
+    .from("cards")
+    .select("*", { count: "exact", head: true })
+    .eq("deck_id", card.deck_id)
+    .eq("is_draft", false);
+  await supabase
+    .from("decks")
+    .update({ card_count: count ?? 0 })
+    .eq("id", card.deck_id);
 
   revalidatePath(`/decks/${card.deck_id}`);
 }
@@ -156,12 +153,13 @@ export async function reorderCards(
   if (deckError || !deck || deck.owner_id !== user.id)
     throw new Error("Deck not found or unauthorized");
 
-  const updates = cardIds.map((id, index) =>
-    supabase.from("cards").update({ position: index }).eq("id", id).eq("deck_id", deckId)
-  );
-  const results = await Promise.all(updates);
-  const failed = results.find((r) => r.error);
-  if (failed?.error) throw new Error(failed.error.message);
+  const positions = cardIds.map((_, index) => index);
+  const { error: reorderError } = await supabase.rpc("bulk_reorder_cards", {
+    p_deck_id: deckId,
+    p_card_ids: cardIds,
+    p_positions: positions,
+  });
+  if (reorderError) throw new Error(reorderError.message);
 
   revalidatePath(`/decks/${deckId}`);
 }
@@ -176,7 +174,7 @@ export async function publishCard(cardId: string) {
     .single();
   if (cardError || !card) throw new Error("Card not found or unauthorized");
 
-  const deck = card.decks as unknown as { owner_id: string } | null;
+  const deck = narrowJoin<DeckOwner>(card.decks);
   if (!deck || deck.owner_id !== user.id) throw new Error("Card not found or unauthorized");
 
   const { data: updated, error } = await supabase
@@ -186,6 +184,17 @@ export async function publishCard(cardId: string) {
     .select()
     .single();
   if (error) throw new Error(error.message);
+
+  // Sync card_count on the deck
+  const { count } = await supabase
+    .from("cards")
+    .select("*", { count: "exact", head: true })
+    .eq("deck_id", card.deck_id)
+    .eq("is_draft", false);
+  await supabase
+    .from("decks")
+    .update({ card_count: count ?? 0 })
+    .eq("id", card.deck_id);
 
   revalidatePath(`/decks/${card.deck_id}`);
   return updated;

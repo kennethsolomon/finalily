@@ -1,41 +1,26 @@
-# Spec: Theme System + Pixel Art Styling + Mascot Integration
+# Spec: No Cards Generated
 
-## Requirements
+## Root Cause
 
-### 1. Preset Theme System (7 themes)
-- **Pixel Pastel** (default) — matches Lil' Bit's pink/green palette
-- **Dark Mode** — dark bg, light text
-- **Dracula** — purple/pink/cyan on dark
-- **Nord** — cool blue-gray tones
-- **Solarized** — warm earth tones
-- **Catppuccin** — pastel on dark
-- **Retro Game** — green/black terminal-style, heavy pixel feel
+Two critical bugs prevent cards from being created and visible to the user:
 
-Scope: colors, backgrounds, text, accents, card styles, borders, shadows, buttons, sidebar/nav — full app theming.
+### Bug 1: PDF handler abandons stream (PRIMARY)
+**File:** `src/app/(app)/decks/new/page.tsx:211-217`
 
-Persistence: stored in user profile DB (`preferences` JSON field), syncs across devices.
+The PDF handler (`handlePdfSubmit`) does NOT consume the response stream. After checking `res.ok`, it immediately shows a success toast and redirects. But the PDF route returns a streaming response — card creation happens inside the stream. When the client navigates away, the server's stream controller loses its consumer and stops processing. **Result: 0 cards created.**
 
-### 2. Pixel Art Font Styling
-- Headings: pixel font (e.g., "Silkscreen" or "Press Start 2P" from Google Fonts)
-- Body: clean sans-serif (keep existing Geist)
-- Pixel decorative accents where appropriate (borders, dividers)
+### Bug 2: Topic handler ignores stream errors
+**File:** `src/app/(app)/decks/new/page.tsx:143-150`
 
-### 3. Mascot Integration (Lil' Bit)
-Placements:
-- Dashboard welcome section (contextual expression based on state)
-- Empty states (no decks, no results)
-- 404 page (already exists, update with mascot)
-- Loading/transition states
-- Anywhere else that makes sense
+The topic handler consumes the stream but discards all event data. If the AI returns invalid JSON, or card insertion fails, the error event is never read. Client shows "Cards generated!" regardless. **Result: false success, potentially 0 cards.**
 
-Available expressions: happy, winking, surprised, sad/angry, smug, sleeping
-Source: /Users/kennethsolomon/Desktop/finalily/
+### Bug 3: PDF route typeMix type mismatch
+**File:** `src/app/api/generate/pdf/route.ts:149,158`
 
-### 4. Animation
-- CSS animations to make Lil' Bit feel alive (idle bounce, breathing, subtle movement)
-- CSS-only approach preferred (no GIF conversion needed)
+The UI sends `typeMix` as `string[]` but the PDF route declares it as `string`. The array is coerced to a comma-joined string (e.g., `"FLASHCARD,MCQ"`) — not properly formatted for the AI prompt.
 
-### 5. Non-Goals
-- No custom theme builder (presets only)
-- No per-component theme overrides
-- No mascot sound effects
+## Fix Plan
+
+1. **Both handlers**: Parse NDJSON stream, detect errors, verify cards created before redirecting
+2. **PDF route**: Fix `typeMix` type to `string[]`, format properly in prompt
+3. **Error handling**: Show actual error messages from stream events instead of false success

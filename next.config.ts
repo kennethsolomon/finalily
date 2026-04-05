@@ -9,6 +9,7 @@ const withSerwist = withSerwistInit({
 
 const nextConfig: NextConfig = {
   turbopack: {},
+  serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
 };
 
 export default withSerwist(nextConfig);

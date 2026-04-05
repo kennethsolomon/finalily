@@ -56,6 +56,22 @@ export function ClozeStudy({ card, onAnswer, showResult }: CardStudyProps) {
     onAnswer(res.every(Boolean), inputs.map((s) => s.trim()).join("|||"));
   }
 
+  if (blanks.length === 0) {
+    return (
+      <div className="flex flex-col gap-4">
+        <div className="rounded-2xl border bg-card p-6">
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-3">
+            Fill in the blanks
+          </p>
+          <p className="text-base leading-relaxed">{source}</p>
+        </div>
+        <div className="rounded-xl border border-amber-300 bg-amber-50/50 p-4 text-sm text-amber-700 dark:bg-amber-500/10 dark:text-amber-400">
+          This card has no blanks to fill in. It may be misconfigured.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-4">
       <div className="rounded-2xl border bg-card p-6">
@@ -125,12 +141,6 @@ export function ClozeStudy({ card, onAnswer, showResult }: CardStudyProps) {
           </button>
         )}
       </form>
-
-      {blanks.length === 0 && !submitted && (
-        <div className="rounded-xl border border-amber-300 bg-amber-50/50 p-4 text-sm text-amber-700 dark:bg-amber-500/10 dark:text-amber-400">
-          This card has no blanks to fill in. It may be misconfigured.
-        </div>
-      )}
 
       {submitted && card.explanation && (
         <div className="rounded-xl border bg-muted/50 p-4 text-sm text-muted-foreground">

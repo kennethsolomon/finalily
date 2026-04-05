@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { buttonVariants } from "@/components/ui/button-variants";
 import { Progress } from "@/components/ui/progress";
 import { Mascot, type MascotExpression } from "@/components/mascot";
-import { Flame, BookOpen, PlusCircle, Target, Brain, AlertCircle } from "lucide-react";
+import { Flame, BookOpen, PlusCircle, Target, Brain, AlertCircle, Zap, Shuffle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export default async function DashboardPage() {
@@ -76,7 +76,9 @@ export default async function DashboardPage() {
   const mistakeCount = results[5].status === "fulfilled" ? results[5].value.count : 0;
 
   const recentSession = recentSessionRows?.[0] ?? null;
-  const recentDeck = (recentSession?.decks as unknown as { id: string; title: string }) ?? null;
+  const recentDeck = (recentSession?.decks && typeof recentSession.decks === "object" && !Array.isArray(recentSession.decks)
+    ? recentSession.decks as { id: string; title: string }
+    : null);
 
   const goalProgress = Math.min(
     100,
@@ -122,9 +124,16 @@ export default async function DashboardPage() {
             <CardContent>
               <p className="text-3xl font-bold">{dueCards}</p>
               <p className="text-xs text-muted-foreground mb-3">cards ready for review</p>
-              <Link href="/decks" className={cn(buttonVariants({ size: "sm" }), "w-full")}>
-                Start Review
-              </Link>
+              <div className="flex gap-2">
+                <Link href="/quick-study?mode=quick" className={cn(buttonVariants({ size: "sm", variant: "outline" }), "flex-1 gap-1")}>
+                  <Zap className="h-3.5 w-3.5" />
+                  Quick 5
+                </Link>
+                <Link href="/quick-study?mode=all" className={cn(buttonVariants({ size: "sm" }), "flex-1 gap-1")}>
+                  <Shuffle className="h-3.5 w-3.5" />
+                  Study All
+                </Link>
+              </div>
             </CardContent>
           </Card>
         )}

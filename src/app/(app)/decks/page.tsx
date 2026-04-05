@@ -7,7 +7,12 @@ import { Mascot } from "@/components/mascot";
 import { PlusCircle } from "lucide-react";
 import { DecksClientWrapper } from "./_components/decks-client-wrapper";
 
-export default async function DecksPage() {
+export default async function DecksPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ focus?: string }>;
+}) {
+  const { focus } = await searchParams;
   const supabase = await createClient();
   const {
     data: { user: authUser },
@@ -29,6 +34,88 @@ export default async function DecksPage() {
     .order("updated_at", { ascending: false });
 
   const deckList = decks ?? [];
+
+  // Fetch review schedules with card deck_id for mastery calculation
+  const allCardIds = deckList.flatMap(
+    (d: { cards: { id: string }[] }) => (d.cards ?? []).map((c) => c.id)
+  );
+  let reviewScheduleMap: Map<string, { ease_factor: number; card_id: string }[]> = new Map();
+  let dueCountMap: Map<string, number> = new Map();
+
+  if (allCardIds.length > 0) {
+    const now = new Date().toISOString();
+    // Fetch review schedules for all user's cards
+    const { data: schedules } = await supabase
+      .from("review_schedules")
+      .select("card_id, ease_factor, next_review_at")
+      .eq("user_id", authUser.id)
+      .in("card_id", allCardIds);
+
+    // Build a card_id -> deck_id lookup
+    const cardToDeck: Record<string, string> = {};
+    for (const deck of deckList as { id: string; cards: { id: string }[] }[]) {
+      for (const card of deck.cards ?? []) {
+        cardToDeck[card.id] = deck.id;
+      }
+    }
+
+    // Group schedules by deck and count due cards
+    for (const s of (schedules ?? []) as { card_id: string; ease_factor: number; next_review_at: string }[]) {
+      const deckId = cardToDeck[s.card_id];
+      if (!deckId) continue;
+
+      if (!reviewScheduleMap.has(deckId)) reviewScheduleMap.set(deckId, []);
+      reviewScheduleMap.get(deckId)!.push({ ease_factor: s.ease_factor, card_id: s.card_id });
+
+      if (s.next_review_at <= now) {
+        dueCountMap.set(deckId, (dueCountMap.get(deckId) ?? 0) + 1);
+      }
+    }
+  }
+
+  // Compute focus-filtered deck IDs
+  let focusDeckIds: Set<string> | null = null;
+
+  if (focus === "weak") {
+    // Get cards with low ease factor
+    const { data: weakSchedules } = await supabase
+      .from("review_schedules")
+      .select("card_id")
+      .eq("user_id", authUser.id)
+      .lt("ease_factor", 2.0);
+    if (weakSchedules && weakSchedules.length > 0) {
+      const weakCardIds = weakSchedules.map((r: { card_id: string }) => r.card_id);
+      const { data: weakCards } = await supabase
+        .from("cards")
+        .select("deck_id")
+        .in("id", weakCardIds);
+      focusDeckIds = new Set((weakCards ?? []).map((c: { deck_id: string }) => c.deck_id));
+    } else {
+      focusDeckIds = new Set();
+    }
+  } else if (focus === "mistakes") {
+    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { data: mistakeAnswers } = await supabase
+      .from("session_answers")
+      .select("cards!inner(deck_id), study_sessions!inner(user_id)")
+      .eq("is_correct", false)
+      .eq("study_sessions.user_id", authUser.id)
+      .gte("created_at", sevenDaysAgo);
+    if (mistakeAnswers && mistakeAnswers.length > 0) {
+      focusDeckIds = new Set(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (mistakeAnswers as any[])
+          .map((a) => {
+            const cards = a.cards;
+            if (Array.isArray(cards)) return cards[0]?.deck_id;
+            return cards?.deck_id;
+          })
+          .filter(Boolean) as string[]
+      );
+    } else {
+      focusDeckIds = new Set();
+    }
+  }
 
   const subjects: string[] = Array.from(
     new Set(deckList.map((d: { subject: string }) => d.subject))
@@ -54,10 +141,17 @@ export default async function DecksPage() {
         );
       const lastSession = completedSessions[0] ?? null;
 
-      const mastery =
-        lastSession && lastSession.total_cards > 0
-          ? Math.round((lastSession.correct_count / lastSession.total_cards) * 100)
-          : null;
+      // Calculate mastery from average ease factor of review schedules
+      // Ease factor range: 1.3 (min) to ~3.5 (high). Map to 0-100%
+      // Formula: ((avgEase - 1.3) / (3.0 - 1.3)) * 100, clamped to 0-100
+      const deckSchedules = reviewScheduleMap.get(deck.id) ?? [];
+      let mastery: number | null = null;
+      if (deckSchedules.length > 0) {
+        const avgEase = deckSchedules.reduce((sum, s) => sum + s.ease_factor, 0) / deckSchedules.length;
+        mastery = Math.round(Math.min(100, Math.max(0, ((avgEase - 1.3) / (3.0 - 1.3)) * 100)));
+      }
+
+      const dueCount = dueCountMap.get(deck.id) ?? 0;
 
       return {
         id: deck.id,
@@ -68,6 +162,7 @@ export default async function DecksPage() {
         updatedAt: deck.updated_at,
         lastStudied: lastSession?.completed_at ?? null,
         mastery,
+        dueCount,
       };
     }
   );
@@ -104,7 +199,12 @@ export default async function DecksPage() {
           </Link>
         </div>
       ) : (
-        <DecksClientWrapper decks={deckData} subjects={subjects} />
+        <DecksClientWrapper
+          decks={deckData}
+          subjects={subjects}
+          focusDeckIds={focusDeckIds ? Array.from(focusDeckIds) : null}
+          focusLabel={focus === "weak" ? "Weak Spots" : focus === "mistakes" ? "Recent Mistakes" : null}
+        />
       )}
     </div>
   );

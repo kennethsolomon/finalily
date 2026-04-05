@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { buttonVariants } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -18,14 +17,19 @@ type DeckItem = {
   updatedAt: string;
   lastStudied: string | null;
   mastery: number | null;
+  dueCount: number;
 };
 
 export function DecksClientWrapper({
   decks,
   subjects,
+  focusDeckIds,
+  focusLabel,
 }: {
   decks: DeckItem[];
   subjects: string[];
+  focusDeckIds?: string[] | null;
+  focusLabel?: string | null;
 }) {
   const [search, setSearch] = useState("");
   const [activeSubject, setActiveSubject] = useState<string | null>(null);
@@ -36,11 +40,23 @@ export function DecksClientWrapper({
       d.title.toLowerCase().includes(search.toLowerCase()) ||
       d.subject.toLowerCase().includes(search.toLowerCase());
     const matchesSubject = !activeSubject || d.subject === activeSubject;
-    return matchesSearch && matchesSubject;
+    const matchesFocus = !focusDeckIds || focusDeckIds.includes(d.id);
+    return matchesSearch && matchesSubject && matchesFocus;
   });
 
   return (
     <div className="space-y-4">
+      {focusLabel && (
+        <div className="flex items-center justify-between rounded-lg border border-primary/30 bg-primary/5 px-4 py-2">
+          <p className="text-sm font-medium">
+            Showing: <span className="text-primary">{focusLabel}</span>
+            {filtered.length === 0 ? " — no matching decks" : ` — ${filtered.length} deck${filtered.length === 1 ? "" : "s"}`}
+          </p>
+          <a href="/decks" className="text-xs text-muted-foreground hover:text-foreground underline">
+            Clear filter
+          </a>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -124,10 +140,19 @@ export function DecksClientWrapper({
                     </div>
                   )}
 
-                  {deck.mastery !== null && (
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <BarChart2 className="h-3 w-3" />
-                      {deck.mastery}% mastery
+                  {(deck.mastery !== null || deck.dueCount > 0) && (
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {deck.mastery !== null && (
+                        <span className="flex items-center gap-1">
+                          <BarChart2 className="h-3 w-3" />
+                          {deck.mastery}% mastery
+                        </span>
+                      )}
+                      {deck.dueCount > 0 && (
+                        <span className="text-primary font-medium">
+                          {deck.dueCount} due
+                        </span>
+                      )}
                     </div>
                   )}
                 </CardContent>

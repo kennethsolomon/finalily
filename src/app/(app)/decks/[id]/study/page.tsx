@@ -2,17 +2,29 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, useSearchParams, useRouter } from "next/navigation";
-import { startSession, submitAnswer, completeSession } from "@/actions/study";
+import { startSession, startRetrySession, resumeSession, submitAnswer, completeSession, updateAnswerConfidence } from "@/actions/study";
 import { Progress } from "@/components/ui/progress";
 import { FlashcardStudy } from "@/components/cards/study/flashcard-study";
 import { MCQStudy } from "@/components/cards/study/mcq-study";
 import { IdentificationStudy } from "@/components/cards/study/identification-study";
 import { TrueFalseStudy } from "@/components/cards/study/true-false-study";
 import { ClozeStudy } from "@/components/cards/study/cloze-study";
+import { AIAssistant } from "@/components/ai-assistant";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 import { Timer, ChevronLeft, Calendar, AlertTriangle, Layers } from "lucide-react";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+  DialogClose,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 
 type StudyMode = "learn" | "quiz" | "test";
 type StudyFilter = "due" | "weak" | "all";
@@ -33,16 +45,28 @@ interface TestAnswer {
   cardId: string;
   isCorrect: boolean;
   userResponse?: string;
+  confidence?: number;
 }
 
 function useTimer() {
   const [seconds, setSeconds] = useState(0);
   const ref = useRef<ReturnType<typeof setInterval> | null>(null);
+  const warnedRef = useRef(false);
 
   useEffect(() => {
     ref.current = setInterval(() => setSeconds((s) => s + 1), 1000);
     return () => { if (ref.current) clearInterval(ref.current); };
   }, []);
+
+  // 30-minute study warning (one-time)
+  useEffect(() => {
+    if (seconds >= 1800 && !warnedRef.current) {
+      warnedRef.current = true;
+      toast.info("You've been studying for 30 minutes. Consider taking a break — spaced practice beats marathon sessions.", {
+        duration: 8000,
+      });
+    }
+  }, [seconds]);
 
   const stop = useCallback(() => {
     if (ref.current) clearInterval(ref.current);
@@ -53,13 +77,13 @@ function useTimer() {
   return { seconds, formatted, stop };
 }
 
-function CardComponent({ card, onAnswer, showResult }: { card: Card; onAnswer: (c: boolean, userResponse?: string) => void; showResult: boolean }) {
+function CardComponent({ card, onAnswer, showResult, isLearnMode }: { card: Card; onAnswer: (c: boolean, userResponse?: string) => void; showResult: boolean; isLearnMode?: boolean }) {
   switch (card.type) {
     case "MCQ": return <MCQStudy card={card} onAnswer={onAnswer} showResult={showResult} />;
     case "IDENTIFICATION": return <IdentificationStudy card={card} onAnswer={onAnswer} showResult={showResult} />;
     case "TRUE_FALSE": return <TrueFalseStudy card={card} onAnswer={onAnswer} showResult={showResult} />;
     case "CLOZE": return <ClozeStudy card={card} onAnswer={onAnswer} showResult={showResult} />;
-    default: return <FlashcardStudy card={card} onAnswer={onAnswer} showResult={showResult} />;
+    default: return <FlashcardStudy card={card} onAnswer={onAnswer} showResult={showResult} hideAnswerButtons={isLearnMode} />;
   }
 }
 
@@ -68,9 +92,12 @@ export default function StudyPage() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const mode = (searchParams.get("mode") ?? "learn") as StudyMode;
+  const retrySessionId = searchParams.get("retry");
+  const resumeSessionId = searchParams.get("resume");
 
   const [filter, setFilter] = useState<StudyFilter | null>(searchParams.get("filter") as StudyFilter | null);
-  const [loading, setLoading] = useState(false);
+  const [usedSavedFilter, setUsedSavedFilter] = useState(false);
+  const [loading, setLoading] = useState(!!searchParams.get("filter") || !!retrySessionId || !!resumeSessionId);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [cards, setCards] = useState<Card[]>([]);
   const [current, setCurrent] = useState(0);
@@ -81,9 +108,22 @@ export default function StudyPage() {
 
   const { seconds, formatted, stop } = useTimer();
 
+  // Check for saved filter in localStorage
+  const savedFilterKey = `finalily-filter-${params.id}`;
+  const getSavedFilter = useCallback((): StudyFilter | null => {
+    if (typeof window === "undefined") return null;
+    const saved = localStorage.getItem(savedFilterKey);
+    if (saved === "due" || saved === "weak" || saved === "all") return saved;
+    return null;
+  }, [savedFilterKey]);
+
   const beginSession = useCallback((selectedFilter: StudyFilter) => {
     setFilter(selectedFilter);
     setLoading(true);
+    // Save filter choice to localStorage for this deck
+    if (typeof window !== "undefined") {
+      localStorage.setItem(savedFilterKey, selectedFilter);
+    }
 
     const modeMap: Record<StudyMode, "LEARN" | "QUIZ" | "TEST"> = {
       learn: "LEARN",
@@ -103,12 +143,49 @@ export default function StudyPage() {
         setLoading(false);
       })
       .catch(() => router.push(`/decks/${params.id}`));
-  }, [params.id, mode, router]);
+  }, [params.id, mode, router, savedFilterKey]);
 
-  // Auto-start if filter is provided via URL
+  // Auto-start retry, resume, or saved-filter session
   useEffect(() => {
+    if (resumeSessionId) {
+      resumeSession(resumeSessionId)
+        .then(({ session, cards: c }) => {
+          setSessionId(session.id);
+          const normalized = (c as Record<string, unknown>[]).map((card) => ({
+            ...card,
+            clozeText: card.cloze_text ?? card.clozeText ?? null,
+          })) as Card[];
+          setCards(normalized);
+          setFilter("all");
+          setLoading(false);
+        })
+        .catch(() => router.push(`/decks/${params.id}`));
+      return;
+    }
+    if (retrySessionId) {
+      startRetrySession({ deckId: params.id, previousSessionId: retrySessionId })
+        .then(({ session, cards: c }) => {
+          setSessionId(session.id);
+          const normalized = (c as Record<string, unknown>[]).map((card) => ({
+            ...card,
+            clozeText: card.cloze_text ?? card.clozeText ?? null,
+          })) as Card[];
+          setCards(normalized);
+          setFilter("all");
+          setLoading(false);
+        })
+        .catch(() => router.push(`/decks/${params.id}`));
+      return;
+    }
     if (filter) {
       beginSession(filter);
+      return;
+    }
+    // Auto-start with saved filter if available
+    const saved = getSavedFilter();
+    if (saved) {
+      setUsedSavedFilter(true);
+      beginSession(saved);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -141,13 +218,23 @@ export default function StudyPage() {
       setCurrent(nextIndex);
       setAnswered(false);
       setShowResult(false);
+      setSelfCheckDone(false);
+      setConfidence(null);
     }
   }, [current, cards.length, sessionId, testAnswers, handleFinish]);
+
+  // Store the card component's actual correctness for LEARN mode rating
+  const cardIsCorrect = useRef(false);
+  // Self-check step: only for flashcard type in Learn mode
+  const [selfCheckDone, setSelfCheckDone] = useState(false);
+  // Confidence self-rating (1=guessed, 2=somewhat sure, 3=confident)
+  const [confidence, setConfidence] = useState<number | null>(null);
 
   const handleAnswer = useCallback(async (isCorrect: boolean, userResponse?: string) => {
     if (!sessionId || answered) return;
     setAnswered(true);
     setShowResult(true);
+    cardIsCorrect.current = isCorrect;
 
     if (mode === "test") {
       setTestAnswers((prev) => [...prev, { cardId: cards[current].id, isCorrect, userResponse }]);
@@ -160,20 +247,46 @@ export default function StudyPage() {
   }, [sessionId, answered, mode, cards, current, advance]);
 
   const [submittingRating, setSubmittingRating] = useState(false);
+  const [showExitDialog, setShowExitDialog] = useState(false);
+  const isSessionActive = !!sessionId && !finishing;
+
+  // Block browser refresh / close / back (hard navigation)
+  useEffect(() => {
+    if (!isSessionActive) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [isSessionActive]);
+
+  const confirmExit = useCallback(() => {
+    setShowExitDialog(false);
+    router.push(`/decks`);
+  }, [router]);
+
+  const handleConfidenceSelect = useCallback((value: number) => {
+    setConfidence(value);
+    // For quiz mode, update the already-submitted answer
+    if (mode === "quiz" && sessionId) {
+      updateAnswerConfidence({ sessionId, cardId: cards[current].id, confidence: value });
+    }
+  }, [mode, sessionId, cards, current]);
 
   const handleRating = useCallback(async (rating: Rating) => {
     if (!sessionId || submittingRating) return;
     setSubmittingRating(true);
-    const isCorrect = rating !== "again";
+    // Use the actual correctness from the card component, not the rating
     await submitAnswer({
       sessionId,
       cardId: cards[current].id,
-      isCorrect,
+      isCorrect: cardIsCorrect.current,
       rating,
+      confidence: confidence ?? undefined,
     });
     setSubmittingRating(false);
     advance();
-  }, [sessionId, cards, current, advance, submittingRating]);
+  }, [sessionId, cards, current, advance, submittingRating, confidence]);
 
   // Filter selection screen
   if (!filter && !loading && !sessionId) {
@@ -257,15 +370,37 @@ export default function StudyPage() {
 
   return (
     <div className="flex flex-col gap-4 max-w-2xl mx-auto">
+      {/* Exit confirmation dialog */}
+      <Dialog open={showExitDialog} onOpenChange={setShowExitDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Exit study session?</DialogTitle>
+            <DialogDescription>
+              Your progress is saved. You can resume this session later from the deck page.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              Continue Studying
+            </DialogClose>
+            <Button
+              onClick={confirmExit}
+            >
+              Save &amp; Exit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Header */}
       <div className="flex items-center justify-between">
-        <Link
-          href={`/decks/${params.id}`}
+        <button
+          onClick={() => setShowExitDialog(true)}
           className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}
         >
           <ChevronLeft className="size-4 mr-1" />
           Exit
-        </Link>
+        </button>
         <div className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <Timer className="size-4" />
           <span className="font-mono">{formatted}</span>
@@ -275,7 +410,14 @@ export default function StudyPage() {
       {/* Progress */}
       <div className="flex flex-col gap-1.5">
         <div className="flex justify-between text-xs text-muted-foreground">
-          <span className="capitalize">{mode} mode</span>
+          <span className="capitalize">
+            {mode} mode
+            {usedSavedFilter && filter && (
+              <span className="ml-1 text-muted-foreground/60">
+                ({filter})
+              </span>
+            )}
+          </span>
           <span>{current + 1} / {cards.length}</span>
         </div>
         <Progress value={progressValue} />
@@ -288,11 +430,58 @@ export default function StudyPage() {
           card={card}
           onAnswer={handleAnswer}
           showResult={mode === "test" ? false : showResult}
+          isLearnMode={mode === "learn"}
         />
       </div>
 
-      {/* LEARN mode rating buttons */}
-      {mode === "learn" && answered && !finishing && (
+      {/* Confidence self-rating (quiz and learn modes only) */}
+      {answered && !finishing && mode !== "test" && (
+        <div className="flex items-center justify-center gap-2 mt-1">
+          <span className="text-xs text-muted-foreground mr-1">Confidence:</span>
+          {([
+            { value: 1, label: "Guessed" },
+            { value: 2, label: "Somewhat Sure" },
+            { value: 3, label: "Confident" },
+          ] as const).map((c) => (
+            <button
+              key={c.value}
+              onClick={() => handleConfidenceSelect(c.value)}
+              className={cn(
+                "text-xs px-2.5 py-1 rounded-full border transition-colors",
+                confidence === c.value
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "border-border text-muted-foreground hover:bg-muted"
+              )}
+            >
+              {c.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* LEARN mode: self-check step for flashcards (before rating) */}
+      {mode === "learn" && answered && !finishing && card.type === "FLASHCARD" && !selfCheckDone && (
+        <div className="flex flex-col gap-2 mt-2">
+          <p className="text-xs text-center text-muted-foreground">Did you get it right?</p>
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={() => { cardIsCorrect.current = false; setSelfCheckDone(true); }}
+              className="rounded-xl border border-destructive/40 bg-destructive/10 py-3 text-sm font-medium text-destructive hover:bg-destructive/20 transition-colors"
+            >
+              I got it wrong
+            </button>
+            <button
+              onClick={() => { cardIsCorrect.current = true; setSelfCheckDone(true); }}
+              className="rounded-xl border border-green-500/40 bg-green-500/10 py-3 text-sm font-medium text-green-700 dark:text-green-400 hover:bg-green-500/20 transition-colors"
+            >
+              I got it right
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* LEARN mode rating buttons (shown after self-check for flashcards, immediately for other types) */}
+      {mode === "learn" && answered && !finishing && (card.type !== "FLASHCARD" || selfCheckDone) && (
         <div className="flex flex-col gap-2 mt-2">
           <p className="text-xs text-center text-muted-foreground">How well did you know this?</p>
           <div className="grid grid-cols-4 gap-2">
@@ -317,6 +506,15 @@ export default function StudyPage() {
       {/* QUIZ mode: next button shows while waiting */}
       {mode === "quiz" && answered && !finishing && (
         <p className="text-center text-sm text-muted-foreground">Advancing automatically...</p>
+      )}
+
+      {/* AI Study Assistant drawer */}
+      {sessionId && !finishing && (
+        <AIAssistant
+          deckId={params.id}
+          cardContext={card ? `Question: ${card.prompt}` : undefined}
+          variant="drawer"
+        />
       )}
     </div>
   );

@@ -48,6 +48,22 @@ export default async function StudyResultsPage({ params }: PageProps) {
   }[];
   const missedAnswers = answers.filter((a) => !a.is_correct);
 
+  // Breakdown by card type
+  const typeBreakdown: Record<string, { correct: number; total: number }> = {};
+  for (const a of answers) {
+    const cardType = a.cards?.type ?? "UNKNOWN";
+    if (!typeBreakdown[cardType]) typeBreakdown[cardType] = { correct: 0, total: 0 };
+    typeBreakdown[cardType].total++;
+    if (a.is_correct) typeBreakdown[cardType].correct++;
+  }
+  const typeLabels: Record<string, string> = {
+    FLASHCARD: "Flashcard",
+    MCQ: "MCQ",
+    IDENTIFICATION: "Identification",
+    TRUE_FALSE: "True/False",
+    CLOZE: "Cloze",
+  };
+
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   const tomorrowStart = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate());
@@ -137,6 +153,39 @@ export default async function StudyResultsPage({ params }: PageProps) {
           </Link>
         )}
       </div>
+
+      {/* Breakdown by card type */}
+      {Object.keys(typeBreakdown).length > 1 && (
+        <div className="rounded-2xl border bg-card p-5">
+          <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">
+            Accuracy by Card Type
+          </h2>
+          <div className="space-y-2">
+            {Object.entries(typeBreakdown)
+              .sort((a, b) => b[1].total - a[1].total)
+              .map(([type, stats]) => {
+                const pct = stats.total > 0 ? Math.round((stats.correct / stats.total) * 100) : 0;
+                return (
+                  <div key={type} className="flex items-center justify-between gap-4">
+                    <span className="text-sm font-medium">{typeLabels[type] ?? type}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={cn(
+                        "text-sm font-bold",
+                        pct >= 80 ? "text-green-600 dark:text-green-400" :
+                        pct >= 60 ? "text-orange-500" : "text-destructive"
+                      )}>
+                        {pct}%
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        ({stats.correct}/{stats.total})
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+          </div>
+        </div>
+      )}
 
       {/* Missed cards */}
       {missedAnswers.length > 0 && (

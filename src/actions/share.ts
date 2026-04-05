@@ -3,21 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { nanoid } from "nanoid";
 import { createClient } from "@/lib/supabase/server";
-
-async function getAuthUser() {
-  const supabase = await createClient();
-  const { data: { user }, error } = await supabase.auth.getUser();
-  if (error || !user) throw new Error("Unauthorized");
-
-  const { data: dbUser, error: userError } = await supabase
-    .from("users")
-    .select("*")
-    .eq("id", user.id)
-    .single();
-  if (userError || !dbUser) throw new Error("User not found");
-
-  return { supabase, user: dbUser };
-}
+import { getAuthUser } from "@/lib/auth";
+import { narrowJoin, type ShareDeckJoin, type DeckFull, type ShareCreator } from "@/lib/supabase/types";
 
 export async function createShareArtifact(data: {
   deckId: string;
@@ -67,22 +54,8 @@ export async function importSharedDeck(code: string) {
     .single();
   if (artifactError || !artifact) throw new Error("Share code not found");
 
-  const deck = (artifact.decks as unknown) as {
-    title: string;
-    subject: string;
-    description: string | null;
-    source_type: string;
-    cards: {
-      type: string;
-      prompt: string;
-      answer: string;
-      explanation: string | null;
-      options: unknown;
-      cloze_text: string | null;
-      position: number;
-      is_draft: boolean;
-    }[];
-  };
+  const deck = narrowJoin<ShareDeckJoin>(artifact.decks);
+  if (!deck) throw new Error("Deck data not found in share artifact");
 
   const publishedCards = deck.cards.filter((c) => !c.is_draft);
 
@@ -143,6 +116,53 @@ export async function importSharedDeck(code: string) {
   return newDeck;
 }
 
+export async function deleteShareArtifact(deckId: string) {
+  const { supabase, user } = await getAuthUser();
+
+  const { data: deck, error: deckError } = await supabase
+    .from("decks")
+    .select("owner_id")
+    .eq("id", deckId)
+    .single();
+  if (deckError || !deck || deck.owner_id !== user.id)
+    throw new Error("Deck not found or unauthorized");
+
+  const { error: deleteError } = await supabase
+    .from("share_artifacts")
+    .delete()
+    .eq("deck_id", deckId);
+  if (deleteError) throw new Error(deleteError.message);
+
+  const { error: updateError } = await supabase
+    .from("decks")
+    .update({ is_shared: false })
+    .eq("id", deckId);
+  if (updateError) throw new Error(updateError.message);
+
+  revalidatePath(`/decks/${deckId}`);
+}
+
+export async function getShareArtifactForDeck(deckId: string) {
+  const { supabase, user } = await getAuthUser();
+
+  const { data: deck, error: deckError } = await supabase
+    .from("decks")
+    .select("owner_id")
+    .eq("id", deckId)
+    .single();
+  if (deckError || !deck || deck.owner_id !== user.id)
+    throw new Error("Deck not found or unauthorized");
+
+  const { data: artifact, error } = await supabase
+    .from("share_artifacts")
+    .select("code, import_count, created_at")
+    .eq("deck_id", deckId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+
+  return artifact;
+}
+
 export async function getSharePreview(code: string) {
   const supabase = await createClient();
 
@@ -162,21 +182,10 @@ export async function getSharePreview(code: string) {
 
   if (error || !artifact) throw new Error("Share code not found");
 
-  const deck = artifact.decks as unknown as {
-    id: string;
-    title: string;
-    subject: string;
-    description: string | null;
-    card_count: number;
-    source_type: string;
-    created_at: string;
-  } | null;
+  const deck = narrowJoin<DeckFull>(artifact.decks);
   if (!deck) throw new Error("Deck not found");
 
-  const creator = (artifact.users as unknown as {
-    display_name: string | null;
-    avatar_url: string | null;
-  }) ?? null;
+  const creator = narrowJoin<ShareCreator>(artifact.users);
 
   return {
     deck,

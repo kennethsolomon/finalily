@@ -25,6 +25,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DeleteDeckButton } from "./_components/delete-deck-button";
+import { ShareDeckPanel } from "./_components/share-deck-button";
+import { ExportDeckButton } from "./_components/export-deck-button";
+import { AIAssistant } from "@/components/ai-assistant";
+import { IncompleteSessionBanner } from "./_components/incomplete-session-banner";
+import { getShareArtifactForDeck } from "@/actions/share";
+import { getIncompleteSession } from "@/actions/study";
 
 const CARD_TYPE_LABELS: Record<string, string> = {
   FLASHCARD: "Flashcard",
@@ -64,6 +70,24 @@ export default async function DeckDetailPage({
 
   if (deckError || !deck || deck.owner_id !== authUser.id) redirect("/decks");
 
+  // Fetch share artifact if deck is shared
+  let shareArtifact: { code: string; import_count: number; created_at: string } | null = null;
+  if (deck.is_shared) {
+    try {
+      shareArtifact = await getShareArtifactForDeck(id);
+    } catch {
+      // Artifact may have been deleted externally; treat as unshared
+    }
+  }
+
+  // Check for incomplete study session
+  let incompleteSession: Awaited<ReturnType<typeof getIncompleteSession>> = null;
+  try {
+    incompleteSession = await getIncompleteSession(id);
+  } catch {
+    // Silently ignore — user can still use the deck normally
+  }
+
   const cards: CardRow[] = ((deck.cards as CardRow[]) ?? []).sort(
     (a, b) => a.position - b.position
   );
@@ -88,7 +112,7 @@ export default async function DeckDetailPage({
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
             <Badge variant="secondary">{deck.subject}</Badge>
-            {deck.is_shared && (
+            {deck.is_shared && shareArtifact && (
               <Badge variant="outline" className="text-xs">
                 <Share2 className="h-3 w-3 mr-1" />
                 Shared
@@ -111,6 +135,10 @@ export default async function DeckDetailPage({
               Study
             </Link>
           )}
+          {!deck.is_shared && (
+            <ShareDeckPanel deckId={id} isShared={false} artifact={null} />
+          )}
+          <ExportDeckButton deckId={id} />
           <Link
             href={`/decks/${id}/edit`}
             className={cn(buttonVariants({ variant: "outline" }), "gap-2")}
@@ -121,6 +149,18 @@ export default async function DeckDetailPage({
           <DeleteDeckButton deckId={id} />
         </div>
       </div>
+
+      {deck.is_shared && (
+        <ShareDeckPanel
+          deckId={id}
+          isShared={true}
+          artifact={shareArtifact}
+        />
+      )}
+
+      {incompleteSession && (
+        <IncompleteSessionBanner deckId={id} session={incompleteSession} />
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Card>
@@ -236,6 +276,23 @@ export default async function DeckDetailPage({
           </div>
         )}
       </div>
+
+      {/* AI Study Assistant */}
+      {publishedCards.length > 0 && (
+        <>
+          <Separator />
+          <div>
+            <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-primary" />
+              Study Assistant
+            </h2>
+            <p className="text-sm text-muted-foreground mb-3">
+              Ask questions about the material in this deck. The AI has access to all your cards.
+            </p>
+            <AIAssistant deckId={id} variant="inline" />
+          </div>
+        </>
+      )}
     </div>
   );
 }
