@@ -1,8 +1,8 @@
 "use server";
 
-import { getOpenRouterClient } from "@/lib/openrouter";
+import { createAIClient, getAIModel, fetchUserAIConfig } from "@/lib/openrouter";
+import { getAuthUser } from "@/lib/auth";
 
-const VALIDATION_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 const TIMEOUT_MS = 5000;
 
 interface ValidationResult {
@@ -33,14 +33,17 @@ export async function validateIdentificationAnswer(data: {
   }
 
   try {
-    const client = getOpenRouterClient();
+    const { supabase, user } = await getAuthUser();
+    const aiConfig = await fetchUserAIConfig(supabase, user.id);
+    const client = createAIClient(aiConfig);
+    const model = getAIModel(aiConfig);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
     const completion = await client.chat.completions.create(
       {
-        model: VALIDATION_MODEL,
+        model,
         messages: [
           {
             role: "system",

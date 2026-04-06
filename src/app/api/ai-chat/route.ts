@@ -1,5 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
-import { getOpenRouterClient, AI_MODEL } from "@/lib/openrouter";
+import { createAIClient, getAIModel, fetchUserAIConfig } from "@/lib/openrouter";
 import { NextRequest } from "next/server";
 
 export async function POST(req: NextRequest) {
@@ -69,10 +69,12 @@ ${deckContext ? `\n--- Study Context ---${deckContext}\n--- End Context ---` : "
 ${cardContext ? `\nThe student is currently looking at: ${cardContext}` : ""}`;
 
   try {
-    const client = getOpenRouterClient();
+    const aiConfig = await fetchUserAIConfig(supabase, user.id);
+    const client = createAIClient(aiConfig);
+    const model = getAIModel(aiConfig);
 
     const stream = await client.chat.completions.create({
-      model: AI_MODEL,
+      model,
       messages: [
         { role: "system", content: systemPrompt },
         ...messages.map((m) => ({ role: m.role as "user" | "assistant", content: m.content })),

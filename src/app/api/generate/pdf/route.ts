@@ -1,6 +1,6 @@
 import { NextRequest } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getOpenRouterClient, AI_MODEL } from "@/lib/openrouter";
+import { createAIClient, getAIModel, fetchUserAIConfig } from "@/lib/openrouter";
 
 // Polyfill browser APIs required by pdfjs-dist (used internally by pdf-parse).
 // Only text extraction is needed, not rendering, so minimal stubs suffice.
@@ -265,11 +265,15 @@ export async function POST(req: NextRequest) {
   const CHUNK_DELAY_MS = 1000; // 1s between chunks to avoid rate limits
   const MAX_RETRIES = 3;
 
+  const aiConfig = await fetchUserAIConfig(supabase, user.id);
+  const client = createAIClient(aiConfig);
+  const model = getAIModel(aiConfig);
+
   async function callWithRetry(prompt: string, retries = MAX_RETRIES): Promise<string> {
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
-        const completion = await getOpenRouterClient().chat.completions.create({
-          model: AI_MODEL,
+        const completion = await client.chat.completions.create({
+          model,
           messages: [{ role: "user", content: prompt }],
           temperature: 0.4,
         });

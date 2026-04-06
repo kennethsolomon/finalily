@@ -17,7 +17,7 @@ Project instructions for Claude Code.
 | **Database** | PostgreSQL via Prisma 7 + Supabase |
 | **Auth** | Supabase Auth (SSR) |
 | **UI** | Tailwind CSS 4 + shadcn/ui + Lucide icons |
-| **Testing** | Not configured yet |
+| **Testing** | Vitest 4 |
 | **AI/LLM** | OpenAI SDK (via OpenRouter) |
 | **PWA** | Serwist (service worker) |
 
@@ -223,4 +223,14 @@ Create entries in: `.claude/docs/architectural_change_log/`
 | `/sk:context-budget` | Audit context window token consumption |
 | `/sk:setup-optimizer` | Diagnose + update workflow + enrich CLAUDE.md |
 | `/sk:skill-creator` | Create or modify skills |
+| `/sk:api-design` | Design REST or GraphQL API contracts |
+| `/sk:autopilot` | Hands-free workflow — all phases automated |
+| `/sk:change` | Handle mid-workflow requirement changes |
+| `/sk:deep-interview` | Socratic requirements-gathering with ambiguity scoring |
+| `/sk:deep-dive` | Two-stage pipeline: parallel trace + deep investigation |
+| `/sk:deps-audit` | Dependency security audit — CVEs, licenses, outdated |
+| `/sk:eval` | Define, run, and report on evaluations |
+| `/sk:explain` | Explain code — file, function, module, or concept |
+| `/sk:team` | Parallel domain agents for full-stack implementation |
+| `/sk:update-task` | Mark task done in todo.md + log to progress.md |
 | `/sk:status` | Show workflow + task status |

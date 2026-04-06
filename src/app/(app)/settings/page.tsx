@@ -11,9 +11,10 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { updateProfile } from "@/actions/profile";
+import { getAIConfig, updateAIConfig, testAIConnection, clearAIConfig } from "@/actions/ai-config";
 import { ThemePicker } from "@/components/theme-picker";
 import { requestNotificationPermission, getNotificationPermission } from "@/lib/notifications";
-import { Bell } from "lucide-react";
+import { Bell, Bot, Loader2 } from "lucide-react";
 import {
   FlaskConical,
   Atom,
@@ -47,6 +48,15 @@ export default function SettingsPage() {
   const [changingPassword, setChangingPassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
 
+  // AI Config state
+  const [aiProvider, setAiProvider] = useState<"default" | "custom">("default");
+  const [aiApiKey, setAiApiKey] = useState("");
+  const [aiBaseUrl, setAiBaseUrl] = useState("");
+  const [aiModelName, setAiModelName] = useState("");
+  const [aiMaskedKey, setAiMaskedKey] = useState<string | null>(null);
+  const [savingAI, setSavingAI] = useState(false);
+  const [testingAI, setTestingAI] = useState(false);
+
   useEffect(() => {
     async function load() {
       const supabase = createClient();
@@ -65,6 +75,15 @@ export default function SettingsPage() {
         setWeeklyGoal((profile as Record<string, unknown>).weekly_goal as number ?? 5);
         const prefs = ((profile as Record<string, unknown>).preferences as Record<string, unknown>) ?? {};
         setSelectedSubjects((prefs.subjects as string[]) ?? []);
+      }
+
+      // Load AI config
+      const aiCfg = await getAIConfig();
+      if (aiCfg.provider === "custom") {
+        setAiProvider("custom");
+        setAiBaseUrl(aiCfg.baseUrl ?? "");
+        setAiModelName(aiCfg.modelName ?? "");
+        setAiMaskedKey(aiCfg.maskedApiKey);
       }
     }
     load();
@@ -99,6 +118,76 @@ export default function SettingsPage() {
       toast.error("Failed to update password", { description: error.message });
     } else {
       toast.success("Password updated");
+    }
+  }
+
+  async function handleSaveAIConfig() {
+    setSavingAI(true);
+    try {
+      const result = await updateAIConfig({
+        provider: aiProvider,
+        apiKey: aiApiKey || undefined,
+        baseUrl: aiBaseUrl || undefined,
+        modelName: aiModelName || undefined,
+      });
+      if (result.success) {
+        toast.success("AI configuration saved");
+        setAiApiKey("");
+        // Reload masked key
+        const cfg = await getAIConfig();
+        setAiMaskedKey(cfg.maskedApiKey);
+      } else {
+        toast.error(result.error ?? "Failed to save AI config");
+      }
+    } catch {
+      toast.error("Failed to save AI configuration");
+    } finally {
+      setSavingAI(false);
+    }
+  }
+
+  async function handleTestConnection() {
+    if (!aiModelName.trim()) {
+      toast.error("Model name is required to test connection");
+      return;
+    }
+    setTestingAI(true);
+    try {
+      const result = await testAIConnection({
+        apiKey: aiApiKey || "not-needed",
+        baseUrl: aiBaseUrl || undefined,
+        modelName: aiModelName,
+      });
+      if (result.success) {
+        toast.success("Connection successful");
+      } else {
+        toast.error(`Connection failed: ${result.error}`);
+      }
+    } catch {
+      toast.error("Connection test failed");
+    } finally {
+      setTestingAI(false);
+    }
+  }
+
+  async function handleClearAIConfig() {
+    setSavingAI(true);
+    try {
+      const result = await clearAIConfig();
+      if (result.success) {
+        setAiProvider("default");
+        setAiApiKey("");
+        setAiBaseUrl("");
+        setAiModelName("");
+        setAiMaskedKey(null);
+        toast.success("AI configuration reset to default");
+      } else {
+        toast.error(result.error ?? "Failed to clear AI config");
+      }
+    } catch {
+      toast.error("Failed to clear AI configuration");
+    } finally {
+      setSavingAI(false);
     }
   }
 
@@ -239,6 +328,133 @@ export default function SettingsPage() {
           {saving ? "Saving…" : "Save changes"}
         </button>
       </div>
+
+      {/* AI Configuration */}
+      <section className="space-y-4">
+        <h2 className="text-base font-medium">AI Configuration</h2>
+        <Separator />
+        <p className="text-sm text-muted-foreground">
+          Use the default AI model or configure your own (Ollama, OpenAI, or any OpenAI-compatible API).
+        </p>
+
+        <div className="space-y-2">
+          <Label className="mb-2 block">Provider</Label>
+          <div className="flex gap-2">
+            <button
+              onClick={() => setAiProvider("default")}
+              className={cn(
+                "flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors",
+                aiProvider === "default"
+                  ? "border-primary bg-primary/5 text-primary"
+                  : "border-border bg-background text-muted-foreground hover:bg-muted"
+              )}
+            >
+              <Bot className="size-4" />
+              Default (OpenRouter)
+            </button>
+            <button
+              onClick={() => setAiProvider("custom")}
+              className={cn(
+                "flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition-colors",
+                aiProvider === "custom"
+                  ? "border-primary bg-primary/5 text-primary"
+                  : "border-border bg-background text-muted-foreground hover:bg-muted"
+              )}
+            >
+              <Bot className="size-4" />
+              Custom
+            </button>
+          </div>
+        </div>
+
+        {aiProvider === "custom" && (
+          <div className="space-y-3 rounded-lg border border-border p-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="ai-base-url">Base URL</Label>
+              <Input
+                id="ai-base-url"
+                value={aiBaseUrl}
+                onChange={(e) => setAiBaseUrl(e.target.value)}
+                placeholder="http://localhost:11434/v1"
+              />
+              <p className="text-xs text-muted-foreground">
+                Leave empty for OpenAI. For Ollama: http://localhost:11434/v1
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="ai-model-name">Model name</Label>
+              <Input
+                id="ai-model-name"
+                value={aiModelName}
+                onChange={(e) => setAiModelName(e.target.value)}
+                placeholder="llama3.2, gpt-4o, etc."
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="ai-api-key">API key</Label>
+              <Input
+                id="ai-api-key"
+                type="password"
+                value={aiApiKey}
+                onChange={(e) => setAiApiKey(e.target.value)}
+                placeholder={aiMaskedKey ?? "sk-... (optional for local models)"}
+              />
+              {aiMaskedKey && !aiApiKey && (
+                <p className="text-xs text-muted-foreground">
+                  Current key: {aiMaskedKey}. Leave empty to keep it.
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                onClick={handleTestConnection}
+                disabled={testingAI || !aiModelName.trim()}
+                className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+              >
+                {testingAI ? (
+                  <>
+                    <Loader2 className="size-3 animate-spin mr-1.5" />
+                    Testing…
+                  </>
+                ) : (
+                  "Test connection"
+                )}
+              </button>
+              <button
+                onClick={handleSaveAIConfig}
+                disabled={savingAI || !aiModelName.trim()}
+                className={cn(buttonVariants({ variant: "default", size: "sm" }))}
+              >
+                {savingAI ? "Saving…" : "Save AI config"}
+              </button>
+              {aiMaskedKey && (
+                <button
+                  onClick={handleClearAIConfig}
+                  disabled={savingAI}
+                  className={cn(buttonVariants({ variant: "ghost", size: "sm" }), "text-destructive")}
+                >
+                  Reset to default
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+
+        {aiProvider === "default" && aiMaskedKey && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleClearAIConfig}
+              disabled={savingAI}
+              className={cn(buttonVariants({ variant: "outline", size: "sm" }))}
+            >
+              {savingAI ? "Clearing…" : "Clear saved custom config"}
+            </button>
+          </div>
+        )}
+      </section>
 
       {/* Account */}
       <section className="space-y-4">
