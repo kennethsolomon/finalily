@@ -58,6 +58,10 @@ export async function getProfile() {
     .eq("id", user.id)
     .single();
 
+  if (data) {
+    delete (data as Record<string, unknown>).ai_api_key;
+  }
+
   return data ?? null;
 }
 

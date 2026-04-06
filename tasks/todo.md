@@ -1,36 +1,51 @@
-# TODO — 2026-04-05 — Toast Notifications + Generation Loading Animation
+# TODO — 2026-04-06 — Custom AI Model Configuration
 
 ## Goal
-Add toast notifications for all user actions (success + error) and animated Lil' Bit mascot loading overlay during AI card generation.
+Allow users to configure their own AI model (local model like Ollama, or their own API key/endpoint) in settings. If custom config is set, use it for all AI generation; if empty, fall back to default OpenRouter API.
+
+## API Contract
+
+### Server Actions (`src/actions/ai-config.ts`)
+- `getAIConfig()` → `{ provider, baseUrl, modelName, hasApiKey, maskedApiKey }`
+- `updateAIConfig({ provider, apiKey, baseUrl, modelName })` → updated config
+- `testAIConnection({ apiKey, baseUrl, modelName })` → `{ success, error? }`
+- `clearAIConfig()` → void
+
+### AI Client (`src/lib/openrouter.ts`)
+- `createAIClient(config?)` → OpenAI instance (custom or default)
+- `getAIModel(config?)` → model string
+- `fetchUserAIConfig(supabase, userId)` → raw config from DB
 
 ## Plan
 
-### Phase 1: Foundation
-- [x] 1.1 Install sonner, mount `<Toaster>` in `src/app/layout.tsx`
+### Phase 1: Database
+- [x] 1.1 Add Supabase migration: `ai_provider`, `ai_api_key`, `ai_base_url`, `ai_model_name` columns to users table
+- [x] 1.2 Update Prisma schema with 4 new User fields
+- [x] 1.3 Run `npx prisma generate` to regenerate client
 
-### Phase 2: Toast Integration — Decks
-- [x] 2.1 `src/app/(app)/decks/new/page.tsx` — toast on createDeck success/error (all 3 modes)
-- [x] 2.2 `src/app/(app)/decks/[id]/edit/page.tsx` — toast on updateDeck, addCard, saveCard, deleteCard, publishCard, reorderCards
-- [x] 2.3 `src/app/(app)/decks/[id]/_components/delete-deck-button.tsx` — toast on deleteDeck
-- [x] 2.4 `src/app/(app)/decks/[id]/review/page.tsx` — toast on accept, save, regenerate, remove, changeType, publishAll
+### Phase 2: Backend — AI Client Refactor
+- [x] 2.1 Refactor `src/lib/openrouter.ts` — export `createAIClient()`, `getAIModel()`, `fetchUserAIConfig()`
+- [x] 2.2 Create `src/actions/ai-config.ts` — getAIConfig, updateAIConfig, testAIConnection, clearAIConfig
+- [x] 2.3 Update `src/app/api/generate/topic/route.ts` — fetch user config, use createAIClient/getAIModel
+- [x] 2.4 Update `src/app/api/generate/pdf/route.ts` — same pattern
+- [x] 2.5 Update `src/app/api/generate/regenerate/route.ts` — same pattern
+- [x] 2.6 Update `src/app/api/ai-chat/route.ts` — same pattern
+- [x] 2.7 Update `src/actions/profile.ts` getProfile() — strip ai_api_key from response
+- [x] 2.8 Update `src/actions/validate-answer.ts` — use user config for answer validation
 
-### Phase 3: Toast Integration — Profile, Share, Onboarding
-- [x] 3.1 `src/app/(app)/settings/page.tsx` — toast on updateProfile, changePassword
-- [x] 3.2 `src/app/(app)/onboarding/page.tsx` — toast on completeOnboarding error
-- [x] 3.3 `src/app/share/[code]/_components/import-button.tsx` — toast on importSharedDeck
+### Phase 3: Frontend — Settings UI
+- [x] 3.1 Add "AI Configuration" section to `src/app/(app)/settings/page.tsx`
 
-### Phase 4: Generation Loading Animation
-- [x] 4.1 Create `src/components/generation-loading.tsx` — animated Lil' Bit overlay cycling expressions
-- [x] 4.2 Add CSS keyframes for expression cycling animation in globals.css
-- [x] 4.3 Integrate loading overlay into `decks/new/page.tsx` for topic + PDF generation
+### Phase 4: Tests
+- [x] 4.1 Test createAIClient fallback logic (default vs custom)
+- [x] 4.2 Test getAIModel fallback logic
+- [x] 4.3 Test API key masking utility
+- [x] 4.4 All 137 existing tests pass
 
 ## Acceptance Criteria
-- [x] Sonner installed and Toaster mounted in root layout
-- [x] All deck CRUD operations show success/error toasts
-- [x] All card CRUD operations show success/error toasts
-- [x] Profile update and password change show toasts
-- [x] Share/import operations show toasts
-- [x] AI generation shows animated Lil' Bit loading overlay with expression cycling
-- [x] Card regeneration shows toast feedback
-- [x] Error toasts include actionable context
-- [x] Toasts don't fire for read-only operations or auto-navigation flows
+- [x] Users can configure custom AI provider (API key, base URL, model name) in settings
+- [x] When custom config is set, all AI generation uses the custom provider
+- [x] When config is empty/default, falls back to OpenRouter
+- [x] API key is never exposed to the client (masked display + stripped from getProfile)
+- [x] All 5 AI endpoints respect user config (topic, pdf, regenerate, ai-chat, validate-answer)
+- [x] Test connection validates custom config before saving
