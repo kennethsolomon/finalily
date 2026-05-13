@@ -10,6 +10,13 @@ const withSerwist = withSerwistInit({
 const nextConfig: NextConfig = {
   turbopack: {},
   serverExternalPackages: ["pdf-parse", "pdfjs-dist"],
+  outputFileTracingIncludes: {
+    "/api/generate/pdf": [
+      "./node_modules/pdf-parse/dist/pdf-parse/cjs/pdf.worker.mjs",
+      "./node_modules/pdfjs-dist/build/pdf.worker.mjs",
+      "./node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs",
+    ],
+  },
 };
 
 export default withSerwist(nextConfig);
