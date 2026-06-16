@@ -1,14 +1,3 @@
-import { createClient } from "@/lib/supabase/server";
-
-type CardRow = {
-  id: string;
-  type: string;
-  prompt: string;
-  answer: string;
-  explanation: string | null;
-  is_draft: boolean;
-  position: number;
-};
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button-variants";
@@ -31,6 +20,8 @@ import { AIAssistant } from "@/components/ai-assistant";
 import { IncompleteSessionBanner } from "./_components/incomplete-session-banner";
 import { getShareArtifactForDeck } from "@/actions/share";
 import { getIncompleteSession } from "@/actions/study";
+import { getSessionUser } from "@/lib/session";
+import { prisma } from "@/lib/prisma";
 
 const CARD_TYPE_LABELS: Record<string, string> = {
   FLASHCARD: "Flashcard",
@@ -55,24 +46,18 @@ export default async function DeckDetailPage({
 }) {
   const { id } = await params;
 
-  const supabase = await createClient();
-  const {
-    data: { user: authUser },
-  } = await supabase.auth.getUser();
+  const user = await getSessionUser();
+  if (!user) redirect("/auth/login");
 
-  if (!authUser) redirect("/auth/login");
+  const deck = await prisma.deck.findUnique({
+    where: { id },
+    include: { cards: { orderBy: { position: "asc" } } },
+  });
 
-  const { data: deck, error: deckError } = await supabase
-    .from("decks")
-    .select("*, cards(*)")
-    .eq("id", id)
-    .single();
+  if (!deck || deck.ownerId !== user.id) redirect("/decks");
 
-  if (deckError || !deck || deck.owner_id !== authUser.id) redirect("/decks");
-
-  // Fetch share artifact if deck is shared
-  let shareArtifact: { code: string; import_count: number; created_at: string } | null = null;
-  if (deck.is_shared) {
+  let shareArtifact: { code: string; importCount: number; createdAt: Date } | null = null;
+  if (deck.isShared) {
     try {
       shareArtifact = await getShareArtifactForDeck(id);
     } catch {
@@ -80,21 +65,17 @@ export default async function DeckDetailPage({
     }
   }
 
-  // Check for incomplete study session
   let incompleteSession: Awaited<ReturnType<typeof getIncompleteSession>> = null;
   try {
     incompleteSession = await getIncompleteSession(id);
   } catch {
-    // Silently ignore — user can still use the deck normally
+    // Silently ignore
   }
 
-  const cards: CardRow[] = ((deck.cards as CardRow[]) ?? []).sort(
-    (a, b) => a.position - b.position
-  );
-  const publishedCards = cards.filter((c) => !c.is_draft);
-  const draftCards = cards.filter((c) => c.is_draft);
+  const cards = deck.cards;
+  const publishedCards = cards.filter((c) => !c.isDraft);
+  const draftCards = cards.filter((c) => c.isDraft);
 
-  // Health check: duplicate prompts, short answers (<10 chars), missing explanations
   const prompts = publishedCards.map((c) => c.prompt.toLowerCase().trim());
   const uniquePrompts = new Set(prompts);
   const duplicateCount = prompts.length - uniquePrompts.size;
@@ -112,7 +93,7 @@ export default async function DeckDetailPage({
         <div className="min-w-0">
           <div className="flex items-center gap-2 flex-wrap mb-1">
             <Badge variant="secondary">{deck.subject}</Badge>
-            {deck.is_shared && shareArtifact && (
+            {deck.isShared && shareArtifact && (
               <Badge variant="outline" className="text-xs">
                 <Share2 className="h-3 w-3 mr-1" />
                 Shared
@@ -135,7 +116,7 @@ export default async function DeckDetailPage({
               Study
             </Link>
           )}
-          {!deck.is_shared && (
+          {!deck.isShared && (
             <ShareDeckPanel deckId={id} isShared={false} artifact={null} />
           )}
           <ExportDeckButton deckId={id} />
@@ -150,7 +131,7 @@ export default async function DeckDetailPage({
         </div>
       </div>
 
-      {deck.is_shared && (
+      {deck.isShared && (
         <ShareDeckPanel
           deckId={id}
           isShared={true}
@@ -205,7 +186,7 @@ export default async function DeckDetailPage({
         </Card>
       </div>
 
-      {draftCards.length > 0 && (deck.source_type === "TOPIC" || deck.source_type === "PDF") && (
+      {draftCards.length > 0 && (deck.sourceType === "TOPIC" || deck.sourceType === "PDF") && (
         <div className="flex items-center gap-3 p-4 rounded-lg border border-amber-500/30 bg-amber-500/10">
           <Sparkles className="h-5 w-5 text-amber-500 shrink-0" />
           <div className="flex-1 min-w-0">
@@ -242,12 +223,12 @@ export default async function DeckDetailPage({
           </div>
         ) : (
           <div className="space-y-2">
-            {cards.map((card: CardRow, idx: number) => (
+            {cards.map((card, idx) => (
               <div
                 key={card.id}
                 className={cn(
                   "flex items-start gap-3 p-3 rounded-lg border bg-card",
-                  card.is_draft && "border-dashed border-amber-500/30 bg-amber-500/5"
+                  card.isDraft && "border-dashed border-amber-500/30 bg-amber-500/5"
                 )}
               >
                 <span className="text-xs text-muted-foreground mt-0.5 w-5 shrink-0">
@@ -263,13 +244,13 @@ export default async function DeckDetailPage({
                 </span>
                 <p className="flex-1 text-sm line-clamp-2">{card.prompt}</p>
                 <Badge
-                  variant={card.is_draft ? "outline" : "secondary"}
+                  variant={card.isDraft ? "outline" : "secondary"}
                   className={cn(
                     "shrink-0 text-xs",
-                    card.is_draft && "border-amber-500/40 text-amber-600 dark:text-amber-400"
+                    card.isDraft && "border-amber-500/40 text-amber-600 dark:text-amber-400"
                   )}
                 >
-                  {card.is_draft ? "Draft" : "Published"}
+                  {card.isDraft ? "Draft" : "Published"}
                 </Badge>
               </div>
             ))}
@@ -277,7 +258,6 @@ export default async function DeckDetailPage({
         )}
       </div>
 
-      {/* AI Study Assistant */}
       {publishedCards.length > 0 && (
         <>
           <Separator />

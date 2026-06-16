@@ -147,7 +147,7 @@ export default function ReviewPage() {
       });
       setCards((prev) =>
         prev.map((c) =>
-          c.id === currentCard.id ? { ...c, ...updated } : c
+          c.id === currentCard.id ? { ...c, ...updated, type: updated.type as CardType } : c
         )
       );
       setEditing(false);
@@ -202,7 +202,7 @@ export default function ReviewPage() {
       const updated = await updateCard(currentCard.id, { type: newType });
       setCards((prev) =>
         prev.map((c) =>
-          c.id === currentCard.id ? { ...c, ...updated } : c
+          c.id === currentCard.id ? { ...c, ...updated, type: updated.type as CardType } : c
         )
       );
       toast.success(`Changed to ${CARD_TYPE_LABELS[newType]}`);

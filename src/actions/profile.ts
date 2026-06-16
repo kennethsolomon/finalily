@@ -1,8 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { createClient } from "@/lib/supabase/server";
 import { getAuthUser } from "@/lib/auth";
+import { getSessionUser } from "@/lib/session";
+import { prisma } from "@/lib/prisma";
 
 export async function updateProfile(data: {
   displayName?: string;
@@ -10,9 +11,9 @@ export async function updateProfile(data: {
   subjects?: string[];
   preferences?: Record<string, unknown>;
 }) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const currentPrefs = (user.preferences as Record<string, unknown>) ?? {};
+  const currentPrefs = JSON.parse(user.preferences || "{}") as Record<string, unknown>;
 
   const ALLOWED_PREF_KEYS = ["theme", "notifications", "studyReminders", "cardFont", "dailyGoal"];
   const safePrefs: Record<string, unknown> = {};
@@ -24,69 +25,61 @@ export async function updateProfile(data: {
     }
   }
 
-  const updatePayload: Record<string, unknown> = {
-    preferences: {
-      ...currentPrefs,
-      ...(data.subjects !== undefined && { subjects: data.subjects }),
-      ...safePrefs,
-    },
+  const mergedPrefs: Record<string, unknown> = {
+    ...currentPrefs,
+    ...(data.subjects !== undefined && { subjects: data.subjects }),
+    ...safePrefs,
   };
-  if (data.displayName !== undefined) updatePayload.display_name = data.displayName;
-  if (data.weeklyGoal !== undefined) updatePayload.weekly_goal = data.weeklyGoal;
 
-  const { data: updated, error } = await supabase
-    .from("users")
-    .update(updatePayload)
-    .eq("id", user.id)
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
+  const updateData: Record<string, unknown> = {
+    preferences: JSON.stringify(mergedPrefs),
+  };
+  if (data.displayName !== undefined) updateData.displayName = data.displayName;
+  if (data.weeklyGoal !== undefined) updateData.weeklyGoal = data.weeklyGoal;
+
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: updateData,
+  });
 
   revalidatePath("/settings");
   revalidatePath("/");
-  return updated;
+
+  const { aiApiKey: _, ...safeUser } = updated;
+  return safeUser;
 }
 
 export async function getProfile() {
-  const supabase = await createClient();
-  const { data: { user }, error } = await supabase.auth.getUser();
-  if (error || !user) return null;
+  const user = await getSessionUser();
+  if (!user) return null;
 
-  const { data } = await supabase
-    .from("users")
-    .select("*")
-    .eq("id", user.id)
-    .single();
-
-  if (data) {
-    delete (data as Record<string, unknown>).ai_api_key;
-  }
-
-  return data ?? null;
+  const { aiApiKey: _, ...safeUser } = user;
+  return safeUser;
 }
 
 export async function completeOnboarding(data: { subjects: string[]; weeklyGoal?: number }) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const currentPrefs = (user.preferences as Record<string, unknown>) ?? {};
+  const currentPrefs = JSON.parse(user.preferences || "{}") as Record<string, unknown>;
 
-  const updatePayload: Record<string, unknown> = {
-    preferences: {
-      ...currentPrefs,
-      subjects: data.subjects,
-      onboardingCompleted: true,
-    },
+  const mergedPrefs: Record<string, unknown> = {
+    ...currentPrefs,
+    subjects: data.subjects,
+    onboardingCompleted: true,
   };
-  if (data.weeklyGoal !== undefined) updatePayload.weekly_goal = data.weeklyGoal;
 
-  const { data: updated, error } = await supabase
-    .from("users")
-    .update(updatePayload)
-    .eq("id", user.id)
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
+  const updateData: Record<string, unknown> = {
+    preferences: JSON.stringify(mergedPrefs),
+  };
+  if (data.weeklyGoal !== undefined) updateData.weeklyGoal = data.weeklyGoal;
+
+  const updated = await prisma.user.update({
+    where: { id: user.id },
+    data: updateData,
+  });
 
   revalidatePath("/");
-  return updated;
+
+  const { aiApiKey: _, ...safeUser } = updated;
+  return safeUser;
 }

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getAuthUser } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 
 export async function createDeck(data: {
   title: string;
@@ -9,21 +10,17 @@ export async function createDeck(data: {
   description?: string;
   sourceType: "TOPIC" | "PDF" | "MANUAL";
 }) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: deck, error } = await supabase
-    .from("decks")
-    .insert({
-      owner_id: user.id,
+  const deck = await prisma.deck.create({
+    data: {
+      ownerId: user.id,
       title: data.title,
       subject: data.subject,
       description: data.description ?? null,
-      source_type: data.sourceType,
-    })
-    .select()
-    .single();
-
-  if (error) throw new Error(error.message);
+      sourceType: data.sourceType,
+    },
+  });
 
   revalidatePath("/");
   return deck;
@@ -33,28 +30,21 @@ export async function updateDeck(
   deckId: string,
   data: { title?: string; subject?: string; description?: string }
 ) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: existing, error: fetchError } = await supabase
-    .from("decks")
-    .select("owner_id")
-    .eq("id", deckId)
-    .single();
-  if (fetchError || !existing || existing.owner_id !== user.id)
+  const existing = await prisma.deck.findUnique({ where: { id: deckId } });
+  if (!existing || existing.ownerId !== user.id)
     throw new Error("Deck not found or unauthorized");
 
-  const updatePayload: Record<string, unknown> = {};
+  const updatePayload: { title?: string; subject?: string; description?: string } = {};
   if (data.title !== undefined) updatePayload.title = data.title;
   if (data.subject !== undefined) updatePayload.subject = data.subject;
   if (data.description !== undefined) updatePayload.description = data.description;
 
-  const { data: updated, error } = await supabase
-    .from("decks")
-    .update(updatePayload)
-    .eq("id", deckId)
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
+  const updated = await prisma.deck.update({
+    where: { id: deckId },
+    data: updatePayload,
+  });
 
   revalidatePath(`/decks/${deckId}`);
   revalidatePath("/");
@@ -62,54 +52,38 @@ export async function updateDeck(
 }
 
 export async function deleteDeck(deckId: string) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: existing, error: fetchError } = await supabase
-    .from("decks")
-    .select("owner_id")
-    .eq("id", deckId)
-    .single();
-  if (fetchError || !existing || existing.owner_id !== user.id)
+  const existing = await prisma.deck.findUnique({ where: { id: deckId } });
+  if (!existing || existing.ownerId !== user.id)
     throw new Error("Deck not found or unauthorized");
 
-  const { error } = await supabase.from("decks").delete().eq("id", deckId);
-  if (error) throw new Error(error.message);
+  await prisma.deck.delete({ where: { id: deckId } });
 
   revalidatePath("/");
   return { success: true };
 }
 
 export async function publishDeck(deckId: string) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: existing, error: fetchError } = await supabase
-    .from("decks")
-    .select("owner_id")
-    .eq("id", deckId)
-    .single();
-  if (fetchError || !existing || existing.owner_id !== user.id)
+  const existing = await prisma.deck.findUnique({ where: { id: deckId } });
+  if (!existing || existing.ownerId !== user.id)
     throw new Error("Deck not found or unauthorized");
 
-  const { error: updateCardsError } = await supabase
-    .from("cards")
-    .update({ is_draft: false })
-    .eq("deck_id", deckId);
-  if (updateCardsError) throw new Error(updateCardsError.message);
+  await prisma.card.updateMany({
+    where: { deckId },
+    data: { isDraft: false },
+  });
 
-  const { count, error: countError } = await supabase
-    .from("cards")
-    .select("*", { count: "exact", head: true })
-    .eq("deck_id", deckId)
-    .eq("is_draft", false);
-  if (countError) throw new Error(countError.message);
+  const count = await prisma.card.count({
+    where: { deckId, isDraft: false },
+  });
 
-  const { data: updated, error } = await supabase
-    .from("decks")
-    .update({ card_count: count ?? 0 })
-    .eq("id", deckId)
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
+  const updated = await prisma.deck.update({
+    where: { id: deckId },
+    data: { cardCount: count },
+  });
 
   revalidatePath(`/decks/${deckId}`);
   revalidatePath("/");
@@ -117,20 +91,15 @@ export async function publishDeck(deckId: string) {
 }
 
 export async function getDeckWithCards(deckId: string) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: deck, error } = await supabase
-    .from("decks")
-    .select("*, cards(*)")
-    .eq("id", deckId)
-    .single();
-  if (error) throw new Error(error.message);
-  if (!deck || deck.owner_id !== user.id) throw new Error("Deck not found or unauthorized");
+  const deck = await prisma.deck.findUnique({
+    where: { id: deckId },
+    include: { cards: { orderBy: { position: "asc" } } },
+  });
 
-  // Sort cards by position
-  if (deck.cards) {
-    deck.cards.sort((a: { position: number }, b: { position: number }) => a.position - b.position);
-  }
+  if (!deck || deck.ownerId !== user.id)
+    throw new Error("Deck not found or unauthorized");
 
   return deck;
 }

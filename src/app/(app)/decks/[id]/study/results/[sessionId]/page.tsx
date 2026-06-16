@@ -1,9 +1,10 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/server";
 import { buttonVariants } from "@/components/ui/button-variants";
 import { cn } from "@/lib/utils";
 import { CheckCircle, XCircle, Clock, RotateCcw, ArrowLeft, CalendarDays } from "lucide-react";
+import { getSessionUser } from "@/lib/session";
+import { prisma } from "@/lib/prisma";
 
 interface PageProps {
   params: Promise<{ id: string; sessionId: string }>;
@@ -12,49 +13,39 @@ interface PageProps {
 export default async function StudyResultsPage({ params }: PageProps) {
   const { id: deckId, sessionId } = await params;
 
-  const supabase = await createClient();
-  const { data: { user: authUser } } = await supabase.auth.getUser();
-  if (!authUser) redirect("/auth/login");
+  const user = await getSessionUser();
+  if (!user) redirect("/auth/login");
 
-  const { data: session } = await supabase
-    .from("study_sessions")
-    .select(`
-      *,
-      decks(id, title),
-      session_answers(
-        id,
-        is_correct,
-        cards(id, prompt, answer, type)
-      )
-    `)
-    .eq("id", sessionId)
-    .single();
+  const session = await prisma.studySession.findUnique({
+    where: { id: sessionId },
+    include: {
+      deck: { select: { id: true, title: true } },
+      answers: {
+        include: { card: { select: { id: true, prompt: true, answer: true, type: true } } },
+      },
+    },
+  });
 
-  if (!session || session.user_id !== authUser.id) redirect(`/decks/${deckId}`);
+  if (!session || session.userId !== user.id) redirect(`/decks/${deckId}`);
 
-  const total = session.total_cards as number;
-  const correct = session.correct_count as number;
+  const total = session.totalCards;
+  const correct = session.correctCount;
   const score = total > 0 ? Math.round((correct / total) * 100) : 0;
 
-  const durationSeconds = session.duration_seconds as number ?? 0;
+  const durationSeconds = session.durationSeconds ?? 0;
   const mins = Math.floor(durationSeconds / 60);
   const secs = durationSeconds % 60;
   const duration = `${mins}m ${secs}s`;
 
-  const answers = (session.session_answers ?? []) as {
-    id: string;
-    is_correct: boolean;
-    cards: { id: string; prompt: string; answer: string; type: string } | null;
-  }[];
-  const missedAnswers = answers.filter((a) => !a.is_correct);
+  const answers = session.answers;
+  const missedAnswers = answers.filter((a) => !a.isCorrect);
 
-  // Breakdown by card type
   const typeBreakdown: Record<string, { correct: number; total: number }> = {};
   for (const a of answers) {
-    const cardType = a.cards?.type ?? "UNKNOWN";
+    const cardType = a.card?.type ?? "UNKNOWN";
     if (!typeBreakdown[cardType]) typeBreakdown[cardType] = { correct: 0, total: 0 };
     typeBreakdown[cardType].total++;
-    if (a.is_correct) typeBreakdown[cardType].correct++;
+    if (a.isCorrect) typeBreakdown[cardType].correct++;
   }
   const typeLabels: Record<string, string> = {
     FLASHCARD: "Flashcard",
@@ -69,25 +60,21 @@ export default async function StudyResultsPage({ params }: PageProps) {
   const tomorrowStart = new Date(tomorrow.getFullYear(), tomorrow.getMonth(), tomorrow.getDate());
   const tomorrowEnd = new Date(tomorrowStart.getTime() + 86400000);
 
-  // Get cards for this deck to filter review schedules
-  const { data: deckCardIds } = await supabase
-    .from("cards")
-    .select("id")
-    .eq("deck_id", deckId);
+  const deckCards = await prisma.card.findMany({
+    where: { deckId },
+    select: { id: true },
+  });
+  const cardIdList = deckCards.map((c) => c.id);
 
-  const cardIdList = (deckCardIds ?? []).map((c: { id: string }) => c.id);
-
-  let dueTomorrow = 0;
-  if (cardIdList.length > 0) {
-    const { count } = await supabase
-      .from("review_schedules")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", authUser.id)
-      .in("card_id", cardIdList)
-      .gte("next_review_at", tomorrowStart.toISOString())
-      .lt("next_review_at", tomorrowEnd.toISOString());
-    dueTomorrow = count ?? 0;
-  }
+  const dueTomorrow = cardIdList.length > 0
+    ? await prisma.reviewSchedule.count({
+        where: {
+          userId: user.id,
+          cardId: { in: cardIdList },
+          nextReviewAt: { gte: tomorrowStart, lt: tomorrowEnd },
+        },
+      })
+    : 0;
 
   const scoreColor =
     score >= 80
@@ -98,7 +85,6 @@ export default async function StudyResultsPage({ params }: PageProps) {
 
   return (
     <div className="max-w-2xl mx-auto flex flex-col gap-6">
-      {/* Score hero */}
       <div className="rounded-2xl border bg-card p-8 text-center">
         <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
           Session Complete
@@ -134,7 +120,6 @@ export default async function StudyResultsPage({ params }: PageProps) {
         </div>
       </div>
 
-      {/* Actions */}
       <div className="flex gap-3">
         <Link
           href={`/decks/${deckId}`}
@@ -154,7 +139,6 @@ export default async function StudyResultsPage({ params }: PageProps) {
         )}
       </div>
 
-      {/* Breakdown by card type */}
       {Object.keys(typeBreakdown).length > 1 && (
         <div className="rounded-2xl border bg-card p-5">
           <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider mb-3">
@@ -187,7 +171,6 @@ export default async function StudyResultsPage({ params }: PageProps) {
         </div>
       )}
 
-      {/* Missed cards */}
       {missedAnswers.length > 0 && (
         <div className="flex flex-col gap-3">
           <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">
@@ -198,10 +181,10 @@ export default async function StudyResultsPage({ params }: PageProps) {
               key={a.id}
               className="rounded-xl border border-destructive/20 bg-destructive/5 p-4"
             >
-              <p className="text-sm font-medium mb-1">{a.cards?.prompt}</p>
+              <p className="text-sm font-medium mb-1">{a.card?.prompt}</p>
               <p className="text-xs text-muted-foreground">
                 Correct answer:{" "}
-                <span className="font-semibold text-foreground">{a.cards?.answer}</span>
+                <span className="font-semibold text-foreground">{a.card?.answer}</span>
               </p>
             </div>
           ))}

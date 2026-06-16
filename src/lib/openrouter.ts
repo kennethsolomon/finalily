@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { prisma } from "@/lib/prisma";
 
 export const DEFAULT_AI_MODEL = "nvidia/nemotron-3-super-120b-a12b:free";
 
@@ -8,6 +8,11 @@ export interface UserAIConfig {
   ai_api_key: string | null;
   ai_base_url: string | null;
   ai_model_name: string | null;
+}
+
+export function isAIConfigured(config?: UserAIConfig | null): boolean {
+  if (config?.ai_provider === "custom" && config.ai_api_key) return true;
+  return !!process.env.OPENROUTER_API_KEY;
 }
 
 export function createAIClient(config?: UserAIConfig | null): OpenAI {
@@ -30,16 +35,18 @@ export function getAIModel(config?: UserAIConfig | null): string {
   return DEFAULT_AI_MODEL;
 }
 
-export async function fetchUserAIConfig(
-  supabase: SupabaseClient,
-  userId: string
-): Promise<UserAIConfig | null> {
-  const { data } = await supabase
-    .from("users")
-    .select("ai_provider, ai_api_key, ai_base_url, ai_model_name")
-    .eq("id", userId)
-    .single();
-  return data;
+export async function fetchUserAIConfig(userId: string): Promise<UserAIConfig | null> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { aiProvider: true, aiApiKey: true, aiBaseUrl: true, aiModelName: true },
+  });
+  if (!user) return null;
+  return {
+    ai_provider: user.aiProvider,
+    ai_api_key: user.aiApiKey,
+    ai_base_url: user.aiBaseUrl,
+    ai_model_name: user.aiModelName,
+  };
 }
 
 export function maskApiKey(key: string | null): string | null {

@@ -1,10 +1,10 @@
-import { createClient } from "@/lib/supabase/server";
-import { createAIClient, getAIModel, fetchUserAIConfig } from "@/lib/openrouter";
+import { createAIClient, getAIModel, fetchUserAIConfig, isAIConfigured } from "@/lib/openrouter";
+import { getSessionUser } from "@/lib/session";
+import { prisma } from "@/lib/prisma";
 import { NextRequest } from "next/server";
 
 export async function POST(req: NextRequest) {
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const user = await getSessionUser();
   if (!user) {
     return new Response("Unauthorized", { status: 401 });
   }
@@ -24,29 +24,26 @@ export async function POST(req: NextRequest) {
   // Build context from deck cards if deckId is provided
   let deckContext = "";
   if (deckId) {
-    const { data: deck } = await supabase
-      .from("decks")
-      .select("title, subject, description")
-      .eq("id", deckId)
-      .eq("owner_id", user.id)
-      .single();
+    const deck = await prisma.deck.findUnique({
+      where: { id: deckId, ownerId: user.id },
+      select: { title: true, subject: true, description: true },
+    });
 
     if (deck) {
       deckContext += `\nDeck: "${deck.title}" (Subject: ${deck.subject})`;
       if (deck.description) deckContext += `\nDescription: ${deck.description}`;
 
       // Fetch card content for context (limit to first 30 cards to stay within token limits)
-      const { data: cards } = await supabase
-        .from("cards")
-        .select("type, prompt, answer, explanation")
-        .eq("deck_id", deckId)
-        .eq("is_draft", false)
-        .order("position", { ascending: true })
-        .limit(30);
+      const cards = await prisma.card.findMany({
+        where: { deckId, isDraft: false },
+        orderBy: { position: "asc" },
+        take: 30,
+        select: { type: true, prompt: true, answer: true, explanation: true },
+      });
 
-      if (cards && cards.length > 0) {
+      if (cards.length > 0) {
         deckContext += `\n\nDeck cards (${cards.length} cards):\n`;
-        deckContext += cards.map((c: { type: string; prompt: string; answer: string; explanation: string | null }, i: number) =>
+        deckContext += cards.map((c, i) =>
           `${i + 1}. [${c.type}] Q: ${c.prompt}\n   A: ${c.answer}${c.explanation ? `\n   Explanation: ${c.explanation}` : ""}`
         ).join("\n");
       }
@@ -69,7 +66,10 @@ ${deckContext ? `\n--- Study Context ---${deckContext}\n--- End Context ---` : "
 ${cardContext ? `\nThe student is currently looking at: ${cardContext}` : ""}`;
 
   try {
-    const aiConfig = await fetchUserAIConfig(supabase, user.id);
+    const aiConfig = await fetchUserAIConfig(user.id);
+    if (!isAIConfigured(aiConfig)) {
+      return new Response("AI service not configured", { status: 503 });
+    }
     const client = createAIClient(aiConfig);
     const model = getAIModel(aiConfig);
 

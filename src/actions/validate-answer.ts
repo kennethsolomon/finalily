@@ -33,8 +33,8 @@ export async function validateIdentificationAnswer(data: {
   }
 
   try {
-    const { supabase, user } = await getAuthUser();
-    const aiConfig = await fetchUserAIConfig(supabase, user.id);
+    const { user } = await getAuthUser();
+    const aiConfig = await fetchUserAIConfig(user.id);
     const client = createAIClient(aiConfig);
     const model = getAIModel(aiConfig);
 

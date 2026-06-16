@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createAIClient, getAIModel, fetchUserAIConfig } from "@/lib/openrouter";
+import { createAIClient, getAIModel, fetchUserAIConfig, isAIConfigured } from "@/lib/openrouter";
+import { getSessionUser } from "@/lib/session";
+import { prisma } from "@/lib/prisma";
 
 // Polyfill browser APIs required by pdfjs-dist (used internally by pdf-parse).
 // Only text extraction is needed, not rendering, so minimal stubs suffice.
@@ -133,66 +134,35 @@ ${chunk}`;
 
 export async function POST(req: NextRequest) {
   // Auth
-  const supabase = await createClient();
-  const { data: { user }, error: authError } = await supabase.auth.getUser();
-  if (authError || !user) {
+  const user = await getSessionUser();
+  if (!user) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401 });
   }
 
-  // Parse JSON body (PDF was uploaded to Supabase Storage by the client)
-  const body = await req.json() as {
-    deckId?: string;
-    storagePath?: string;
-    originalFilename?: string;
-    difficulty?: string;
-    cardCount?: number;
-    typeMix?: string[];
-    pageFrom?: number;
-    pageTo?: number;
-    aiInstructions?: string;
-  };
+  // Parse multipart/form-data (PDF uploaded directly by the client)
+  const formData = await req.formData();
+  const file = formData.get("file") as File;
+  const deckId = formData.get("deckId") as string;
+  const difficulty = (formData.get("difficulty") as string) || "medium";
+  const cardCount = Math.max(1, Math.min(50, parseInt(formData.get("cardCount") as string) || 10));
+  const typeMix = JSON.parse((formData.get("typeMix") as string) || '["FLASHCARD"]');
+  const pageFrom = formData.get("pageFrom") ? parseInt(formData.get("pageFrom") as string) : undefined;
+  const pageTo = formData.get("pageTo") ? parseInt(formData.get("pageTo") as string) : undefined;
+  const aiInstructions = (formData.get("aiInstructions") as string)?.slice(0, 1000) || undefined;
+  const originalFilename = file?.name || "document.pdf";
 
-  const { deckId, storagePath, originalFilename } = body;
-  const difficulty = body.difficulty || "medium";
-  const cardCount = Math.max(1, Math.min(50, body.cardCount || 10));
-  const typeMix = (body.typeMix && body.typeMix.length > 0 ? body.typeMix : ["FLASHCARD"]).join(", ");
-  const pageFrom = body.pageFrom ? Math.max(1, body.pageFrom) : undefined;
-  const pageTo = body.pageTo ? Math.max(1, body.pageTo) : undefined;
-  const aiInstructions = body.aiInstructions?.slice(0, 1000) || undefined;
-
-  if (!deckId || !storagePath) {
-    return new Response(JSON.stringify({ error: "deckId and storagePath are required" }), { status: 400 });
+  if (!deckId || !file) {
+    return new Response(JSON.stringify({ error: "deckId and file are required" }), { status: 400 });
   }
 
   // Validate deck ownership
-  const { data: deck, error: deckError } = await supabase
-    .from("decks")
-    .select("owner_id")
-    .eq("id", deckId)
-    .single();
-
-  if (deckError || !deck || deck.owner_id !== user.id) {
+  const deck = await prisma.deck.findUnique({ where: { id: deckId }, select: { ownerId: true } });
+  if (!deck || deck.ownerId !== user.id) {
     return new Response(JSON.stringify({ error: "Deck not found or unauthorized" }), { status: 403 });
   }
 
-  // Validate storage path belongs to user
-  if (!storagePath.startsWith(`${user.id}/`)) {
-    return new Response(JSON.stringify({ error: "Invalid storage path" }), { status: 403 });
-  }
-
-  // Download PDF from Supabase Storage
-  const { data: fileData, error: downloadError } = await supabase.storage
-    .from("pdfs")
-    .download(storagePath);
-
-  if (downloadError || !fileData) {
-    return new Response(
-      JSON.stringify({ error: `Failed to download PDF: ${downloadError?.message ?? "unknown"}` }),
-      { status: 500 }
-    );
-  }
-
-  const buffer = Buffer.from(await fileData.arrayBuffer());
+  // Get buffer directly from uploaded file
+  const buffer = Buffer.from(await file.arrayBuffer());
 
   if (buffer.length > MAX_FILE_SIZE) {
     return new Response(JSON.stringify({ error: "File exceeds 20 MB limit" }), { status: 400 });
@@ -201,6 +171,12 @@ export async function POST(req: NextRequest) {
   // Validate PDF magic bytes
   if (buffer.length < 5 || buffer.subarray(0, 5).toString() !== "%PDF-") {
     return new Response(JSON.stringify({ error: "File must be a valid PDF" }), { status: 400 });
+  }
+
+  // Check AI configuration
+  const aiConfig = await fetchUserAIConfig(user.id);
+  if (!isAIConfigured(aiConfig)) {
+    return new Response(JSON.stringify({ error: "AI is not configured" }), { status: 503 });
   }
 
   // Extract text from specified page range
@@ -240,32 +216,24 @@ export async function POST(req: NextRequest) {
   const chunks = chunkText(extractedText, CHUNK_WORDS);
 
   // Create SourceDocument
-  const { data: sourceDoc, error: sourceDocError } = await supabase
-    .from("source_documents")
-    .insert({
-      deck_id: deckId,
-      filename: originalFilename ?? storagePath.split("/").pop() ?? "document.pdf",
-      mime_type: "application/pdf",
-      storage_path: storagePath,
-      extracted_text: extractedText,
-      chunks,
-    })
-    .select("id")
-    .single();
-
-  if (sourceDocError || !sourceDoc) {
-    return new Response(
-      JSON.stringify({ error: `Failed to create source document: ${sourceDocError?.message}` }),
-      { status: 500 }
-    );
-  }
+  const sourceDoc = await prisma.sourceDocument.create({
+    data: {
+      deckId,
+      filename: originalFilename,
+      mimeType: "application/pdf",
+      storagePath: "local",
+      extractedText,
+      chunks: JSON.stringify(chunks),
+    },
+    select: { id: true },
+  });
 
   // Stream NDJSON response
   const encoder = new TextEncoder();
   const CHUNK_DELAY_MS = 1000; // 1s between chunks to avoid rate limits
   const MAX_RETRIES = 3;
 
-  const aiConfig = await fetchUserAIConfig(supabase, user.id);
+  const typeMixStr = (Array.isArray(typeMix) && typeMix.length > 0 ? typeMix : ["FLASHCARD"]).join(", ");
   const client = createAIClient(aiConfig);
   const model = getAIModel(aiConfig);
 
@@ -309,7 +277,7 @@ export async function POST(req: NextRequest) {
         const chunk = chunks[i];
         // Sanitize chunk text: strip control chars and non-printable content
         const sanitizedChunk = chunk.replace(/[^\w\s.,!?'"-]/g, " ");
-        const prompt = buildCardPrompt(sanitizedChunk, difficulty, chunkCardCount, typeMix, aiInstructions, i, chunks.length);
+        const prompt = buildCardPrompt(sanitizedChunk, difficulty, chunkCardCount, typeMixStr, aiInstructions, i, chunks.length);
 
         try {
           const rawContent = await callWithRetry(prompt);
@@ -346,23 +314,24 @@ export async function POST(req: NextRequest) {
 
           // Batch insert all valid cards for this chunk
           if (validCards.length > 0) {
-            const { error: insertError } = await supabase.from("cards").insert(
-              validCards.map((c, idx) => ({
-                deck_id: deckId!,
-                type: (["FLASHCARD", "MCQ", "IDENTIFICATION", "TRUE_FALSE", "CLOZE"].includes(c.type) ? c.type : "FLASHCARD") as "FLASHCARD" | "MCQ" | "IDENTIFICATION" | "TRUE_FALSE" | "CLOZE",
-                prompt: c.prompt,
-                answer: c.answer,
-                explanation: c.explanation,
-                options: c.options,
-                cloze_text: c.cloze_text,
-                source_chunk_id: sourceDoc.id,
-                position: totalCreated + idx,
-                is_draft: true,
-              }))
-            );
-            if (insertError) {
+            try {
+              await prisma.card.createMany({
+                data: validCards.map((c, idx) => ({
+                  deckId: deckId!,
+                  type: (["FLASHCARD", "MCQ", "IDENTIFICATION", "TRUE_FALSE", "CLOZE"].includes(c.type) ? c.type : "FLASHCARD") as "FLASHCARD" | "MCQ" | "IDENTIFICATION" | "TRUE_FALSE" | "CLOZE",
+                  prompt: c.prompt,
+                  answer: c.answer,
+                  explanation: c.explanation,
+                  options: c.options ? JSON.stringify(c.options) : null,
+                  cloze_text: c.cloze_text,
+                  sourceChunkId: sourceDoc.id,
+                  position: totalCreated + idx,
+                  isDraft: true,
+                })),
+              });
+            } catch (insertError) {
               controller.enqueue(
-                encoder.encode(JSON.stringify({ error: `Card insert failed: ${insertError.message}`, chunk: i + 1 }) + "\n")
+                encoder.encode(JSON.stringify({ error: `Card insert failed: ${insertError instanceof Error ? insertError.message : "unknown"}`, chunk: i + 1 }) + "\n")
               );
               continue;
             }

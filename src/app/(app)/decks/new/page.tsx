@@ -20,7 +20,6 @@ import { Sparkles, Upload, Pencil, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { createDeck, deleteDeck } from "@/actions/decks";
-import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { GenerationLoading } from "@/components/generation-loading";
 
 type Mode = "choose" | "topic" | "pdf" | "manual";
@@ -191,24 +190,7 @@ export default function NewDeckPage() {
     if (!file || !topic.trim()) return;
     setLoading(true);
     let createdDeckId: string | null = null;
-    let uploadedStoragePath: string | null = null;
-    let supabase: ReturnType<typeof createBrowserClient> | null = null;
     try {
-      // Upload PDF directly to Supabase Storage (bypasses Next.js body limit)
-      supabase = createBrowserClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Not authenticated");
-
-      const filename = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, "_")}`;
-      const storagePath = `${user.id}/${filename}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from("pdfs")
-        .upload(storagePath, file, { contentType: "application/pdf", upsert: false });
-
-      if (uploadError) throw new Error(`Upload failed: ${uploadError.message}`);
-      uploadedStoragePath = storagePath;
-
       const deck = await createDeck({
         title: topic.trim(),
         subject: topic.trim(),
@@ -216,27 +198,26 @@ export default function NewDeckPage() {
       });
       createdDeckId = deck.id;
 
-      // Call API with JSON body (small payload — PDF is already in storage)
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("deckId", deck.id);
+      formData.append("originalFilename", file.name);
+      formData.append("difficulty", difficulty);
+      formData.append("cardCount", String(cardCount));
+      formData.append("typeMix", JSON.stringify(typeMix));
+      if (pageFrom) formData.append("pageFrom", pageFrom);
+      if (pageTo) formData.append("pageTo", pageTo);
+      if (aiInstructions.trim()) formData.append("aiInstructions", aiInstructions.trim());
+
       const res = await fetch("/api/generate/pdf", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          deckId: deck.id,
-          storagePath,
-          originalFilename: file.name,
-          difficulty,
-          cardCount,
-          typeMix,
-          pageFrom: pageFrom ? Number(pageFrom) : undefined,
-          pageTo: pageTo ? Number(pageTo) : undefined,
-          ...(aiInstructions.trim() && { aiInstructions: aiInstructions.trim() }),
-        }),
+        body: formData,
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? "Generation failed");
       }
-      // Consume NDJSON stream and wait for card creation to complete
+
       const reader = res.body?.getReader();
       const decoder = new TextDecoder();
       let totalCards = 0;
@@ -253,12 +234,8 @@ export default function NewDeckPage() {
             if (!line.trim()) continue;
             try {
               const event = JSON.parse(line);
-              if (event.error) {
-                streamError = event.error;
-              }
-              if (event.done && event.totalCards != null) {
-                totalCards = event.totalCards;
-              }
+              if (event.error) streamError = event.error;
+              if (event.done && event.totalCards != null) totalCards = event.totalCards;
             } catch {
               // skip malformed NDJSON lines
             }
@@ -270,13 +247,8 @@ export default function NewDeckPage() {
       toast.success(`${totalCards} cards generated! Redirecting to review...`);
       router.push(`/decks/${deck.id}/review`);
     } catch (err) {
-      // Clean up orphaned deck if it was created before the failure
       if (createdDeckId) {
         await deleteDeck(createdDeckId).catch(() => {});
-      }
-      // Clean up uploaded PDF from storage if the generation failed
-      if (uploadedStoragePath && supabase) {
-        await supabase.storage.from("pdfs").remove([uploadedStoragePath]).catch(() => {});
       }
       const msg = err instanceof Error ? err.message : "Something went wrong";
       toast.error("Generation failed", { description: msg });

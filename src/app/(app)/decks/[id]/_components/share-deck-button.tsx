@@ -25,8 +25,8 @@ import { toast } from "sonner";
 
 type ShareArtifact = {
   code: string;
-  import_count: number;
-  created_at: string;
+  importCount: number;
+  createdAt: Date;
 };
 
 export function ShareDeckPanel({
@@ -61,8 +61,8 @@ export function ShareDeckPanel({
       });
       setCurrentArtifact({
         code: result.code,
-        import_count: result.import_count,
-        created_at: result.created_at,
+        importCount: result.importCount,
+        createdAt: result.createdAt,
       });
       setCurrentlyShared(true);
       const url = `${window.location.origin}/share/${result.code}`;
@@ -130,8 +130,8 @@ export function ShareDeckPanel({
           </div>
           <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <Users className="h-3.5 w-3.5" />
-            {currentArtifact.import_count}{" "}
-            {currentArtifact.import_count === 1 ? "import" : "imports"}
+            {currentArtifact.importCount}{" "}
+            {currentArtifact.importCount === 1 ? "import" : "imports"}
           </div>
         </div>
 

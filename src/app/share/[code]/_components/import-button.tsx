@@ -4,7 +4,6 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
-import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { importSharedDeck } from "@/actions/share";
 import { Download } from "lucide-react";
@@ -21,21 +20,16 @@ export function ImportButton({ code }: ImportButtonProps) {
   async function handleImport() {
     setLoading(true);
     setError("");
-
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      router.push(`/auth/login?next=/share/${code}`);
-      return;
-    }
-
     try {
       const newDeck = await importSharedDeck(code);
       toast.success("Deck imported!");
-      router.push(`/decks/${newDeck.id}`);
+      router.push("/decks/" + newDeck.id);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Import failed. Please try again.";
+      const msg = err instanceof Error ? err.message : "Import failed";
+      if (msg === "Unauthorized") {
+        router.push("/auth/login?next=/share/" + code);
+        return;
+      }
       toast.error(msg);
       setError(msg);
       setLoading(false);

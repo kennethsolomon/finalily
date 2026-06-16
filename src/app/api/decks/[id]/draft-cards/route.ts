@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { getSessionUser } from "@/lib/session";
+import { prisma } from "@/lib/prisma";
 
 export async function GET(
   _req: NextRequest,
@@ -7,36 +8,24 @@ export async function GET(
 ) {
   const { id } = await params;
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-    error,
-  } = await supabase.auth.getUser();
-
-  if (error || !user) {
+  const user = await getSessionUser();
+  if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const { data: deck, error: deckError } = await supabase
-    .from("decks")
-    .select("owner_id")
-    .eq("id", id)
-    .single();
+  const deck = await prisma.deck.findUnique({
+    where: { id, ownerId: user.id },
+    select: { id: true },
+  });
 
-  if (deckError || !deck || deck.owner_id !== user.id) {
+  if (!deck) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const { data: cards, error: cardsError } = await supabase
-    .from("cards")
-    .select("*")
-    .eq("deck_id", id)
-    .eq("is_draft", true)
-    .order("position", { ascending: true });
+  const cards = await prisma.card.findMany({
+    where: { deckId: id, isDraft: true },
+    orderBy: { position: "asc" },
+  });
 
-  if (cardsError) {
-    return NextResponse.json({ error: cardsError.message }, { status: 500 });
-  }
-
-  return NextResponse.json(cards ?? []);
+  return NextResponse.json(cards);
 }

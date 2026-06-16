@@ -1,4 +1,3 @@
-import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -7,90 +6,78 @@ import { TrendingUp, TrendingDown, Brain, Calendar, BarChart3, AlertTriangle } f
 import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button-variants";
 import { cn } from "@/lib/utils";
+import { getSessionUser } from "@/lib/session";
+import { prisma } from "@/lib/prisma";
 
 export default async function AnalyticsPage() {
-  const supabase = await createClient();
-  const { data: { user: authUser } } = await supabase.auth.getUser();
-  if (!authUser) redirect("/auth/login");
+  const user = await getSessionUser();
+  if (!user) redirect("/auth/login");
 
   const now = new Date();
-  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString();
+  const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
   const tomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   const nextWeek = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
 
   const [
-    { data: recentSessions },
-    { data: weakSchedules },
-    { count: dueToday },
-    { count: dueTomorrow },
-    { count: dueThisWeek },
-    { data: decksRaw },
+    recentSessionsRaw,
+    weakSchedulesRaw,
+    dueToday,
+    dueTomorrow,
+    dueThisWeek,
+    decksRaw,
   ] = await Promise.all([
-    // Last 30 days of completed sessions with answers
-    supabase
-      .from("study_sessions")
-      .select("id, completed_at, correct_count, total_cards, duration_seconds, mode, deck_id, decks(title)")
-      .eq("user_id", authUser.id)
-      .not("completed_at", "is", null)
-      .gte("completed_at", thirtyDaysAgo)
-      .order("completed_at", { ascending: true }),
-    // Weak cards (low ease factor)
-    supabase
-      .from("review_schedules")
-      .select("card_id, ease_factor, repetitions, cards(prompt, answer, deck_id, decks(title))")
-      .eq("user_id", authUser.id)
-      .lt("ease_factor", 2.0)
-      .order("ease_factor", { ascending: true })
-      .limit(20),
-    // Due counts
-    supabase
-      .from("review_schedules")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", authUser.id)
-      .lte("next_review_at", now.toISOString()),
-    supabase
-      .from("review_schedules")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", authUser.id)
-      .gt("next_review_at", now.toISOString())
-      .lte("next_review_at", tomorrow.toISOString()),
-    supabase
-      .from("review_schedules")
-      .select("*", { count: "exact", head: true })
-      .eq("user_id", authUser.id)
-      .lte("next_review_at", nextWeek.toISOString()),
-    // All decks with card counts and session stats
-    supabase
-      .from("decks")
-      .select("id, title, cards(id, is_draft), study_sessions(correct_count, total_cards, completed_at)")
-      .eq("owner_id", authUser.id)
-      .order("updated_at", { ascending: false }),
+    prisma.studySession.findMany({
+      where: { userId: user.id, completedAt: { not: null, gte: thirtyDaysAgo } },
+      include: { deck: { select: { title: true } } },
+      orderBy: { completedAt: "asc" },
+    }),
+    prisma.reviewSchedule.findMany({
+      where: { userId: user.id, easeFactor: { lt: 2.0 } },
+      include: { card: { include: { deck: { select: { title: true } } } } },
+      orderBy: { easeFactor: "asc" },
+      take: 20,
+    }),
+    prisma.reviewSchedule.count({
+      where: { userId: user.id, nextReviewAt: { lte: now } },
+    }),
+    prisma.reviewSchedule.count({
+      where: { userId: user.id, nextReviewAt: { gt: now, lte: tomorrow } },
+    }),
+    prisma.reviewSchedule.count({
+      where: { userId: user.id, nextReviewAt: { lte: nextWeek } },
+    }),
+    prisma.deck.findMany({
+      where: { ownerId: user.id },
+      include: {
+        cards: { select: { isDraft: true } },
+        studySessions: { select: { correctCount: true, totalCards: true, completedAt: true } },
+      },
+      orderBy: { updatedAt: "desc" },
+    }),
   ]);
 
-  const sessions = (recentSessions ?? []).map((s: Record<string, unknown>) => ({
-    id: s.id as string,
-    completed_at: s.completed_at as string,
-    correct_count: s.correct_count as number,
-    total_cards: s.total_cards as number,
-    duration_seconds: s.duration_seconds as number,
-    mode: s.mode as string,
-    deck_id: s.deck_id as string,
-    deckTitle: ((s.decks as Record<string, unknown> | null)?.title as string) ?? "Unknown",
+  const sessions = recentSessionsRaw.map((s) => ({
+    id: s.id,
+    completedAt: s.completedAt!.toISOString(),
+    correctCount: s.correctCount,
+    totalCards: s.totalCards,
+    durationSeconds: s.durationSeconds,
+    mode: s.mode,
+    deckId: s.deckId,
+    deckTitle: s.deck?.title ?? "Unknown",
   }));
 
-  // 30-day accuracy trend (grouped by day)
   const dailyStats = new Map<string, { correct: number; total: number; sessions: number }>();
   for (const s of sessions) {
-    const day = new Date(s.completed_at).toLocaleDateString("en-CA"); // YYYY-MM-DD
+    const day = new Date(s.completedAt).toLocaleDateString("en-CA");
     const prev = dailyStats.get(day) ?? { correct: 0, total: 0, sessions: 0 };
     dailyStats.set(day, {
-      correct: prev.correct + s.correct_count,
-      total: prev.total + s.total_cards,
+      correct: prev.correct + s.correctCount,
+      total: prev.total + s.totalCards,
       sessions: prev.sessions + 1,
     });
   }
 
-  // Build 30-day array for the chart
   const trendDays: { date: string; accuracy: number | null; sessions: number }[] = [];
   for (let i = 29; i >= 0; i--) {
     const d = new Date(now.getTime() - i * 24 * 60 * 60 * 1000);
@@ -103,37 +90,29 @@ export default async function AnalyticsPage() {
     });
   }
 
-  // Overall stats
-  const totalCorrect = sessions.reduce((sum, s) => sum + s.correct_count, 0);
-  const totalCards = sessions.reduce((sum, s) => sum + s.total_cards, 0);
+  const totalCorrect = sessions.reduce((sum, s) => sum + s.correctCount, 0);
+  const totalCards = sessions.reduce((sum, s) => sum + s.totalCards, 0);
   const overallAccuracy = totalCards > 0 ? Math.round((totalCorrect / totalCards) * 100) : 0;
-  const totalStudyMinutes = Math.round(sessions.reduce((sum, s) => sum + s.duration_seconds, 0) / 60);
+  const totalStudyMinutes = Math.round(sessions.reduce((sum, s) => sum + s.durationSeconds, 0) / 60);
 
-  // Last 7 days vs previous 7 days for trend
-  const last7 = sessions.filter((s) => new Date(s.completed_at) >= new Date(now.getTime() - 7 * 86400000));
+  const last7 = sessions.filter((s) => new Date(s.completedAt) >= new Date(now.getTime() - 7 * 86400000));
   const prev7 = sessions.filter((s) => {
-    const d = new Date(s.completed_at);
+    const d = new Date(s.completedAt);
     return d >= new Date(now.getTime() - 14 * 86400000) && d < new Date(now.getTime() - 7 * 86400000);
   });
-  const last7Acc = last7.reduce((s, v) => s + v.total_cards, 0) > 0
-    ? Math.round((last7.reduce((s, v) => s + v.correct_count, 0) / last7.reduce((s, v) => s + v.total_cards, 0)) * 100)
+  const last7Acc = last7.reduce((s, v) => s + v.totalCards, 0) > 0
+    ? Math.round((last7.reduce((s, v) => s + v.correctCount, 0) / last7.reduce((s, v) => s + v.totalCards, 0)) * 100)
     : null;
-  const prev7Acc = prev7.reduce((s, v) => s + v.total_cards, 0) > 0
-    ? Math.round((prev7.reduce((s, v) => s + v.correct_count, 0) / prev7.reduce((s, v) => s + v.total_cards, 0)) * 100)
+  const prev7Acc = prev7.reduce((s, v) => s + v.totalCards, 0) > 0
+    ? Math.round((prev7.reduce((s, v) => s + v.correctCount, 0) / prev7.reduce((s, v) => s + v.totalCards, 0)) * 100)
     : null;
   const trend = last7Acc !== null && prev7Acc !== null ? last7Acc - prev7Acc : null;
 
-  // Deck mastery rankings
-  const deckStats = (decksRaw ?? []).map((deck: {
-    id: string;
-    title: string;
-    cards: { id: string; is_draft: boolean }[];
-    study_sessions: { correct_count: number; total_cards: number; completed_at: string | null }[];
-  }) => {
-    const completedSessions = (deck.study_sessions ?? []).filter((s) => s.completed_at);
-    const correct = completedSessions.reduce((sum, s) => sum + s.correct_count, 0);
-    const total = completedSessions.reduce((sum, s) => sum + s.total_cards, 0);
-    const cardCount = (deck.cards ?? []).filter((c) => !c.is_draft).length;
+  const deckStats = decksRaw.map((deck) => {
+    const completedSessions = deck.studySessions.filter((s) => s.completedAt !== null);
+    const correct = completedSessions.reduce((sum, s) => sum + s.correctCount, 0);
+    const total = completedSessions.reduce((sum, s) => sum + s.totalCards, 0);
+    const cardCount = deck.cards.filter((c) => !c.isDraft).length;
     return {
       id: deck.id,
       title: deck.title,
@@ -141,25 +120,18 @@ export default async function AnalyticsPage() {
       mastery: total > 0 ? Math.round((correct / total) * 100) : null,
       sessionCount: completedSessions.length,
     };
-  }).sort((a: { mastery: number | null }, b: { mastery: number | null }) =>
-    (b.mastery ?? -1) - (a.mastery ?? -1)
-  );
+  }).sort((a, b) => (b.mastery ?? -1) - (a.mastery ?? -1));
 
-  // Weak cards
-  const weakCards = (weakSchedules ?? []).map((ws: Record<string, unknown>) => {
-    const card = ws.cards as Record<string, unknown> | null;
-    const deck = card?.decks as Record<string, unknown> | null;
-    return {
-      cardId: ws.card_id as string,
-      prompt: (card?.prompt as string) ?? "Unknown",
-      answer: (card?.answer as string) ?? "",
-      deckTitle: (deck?.title as string) ?? "Unknown deck",
-      easeFactor: ws.ease_factor as number,
-      repetitions: ws.repetitions as number,
-    };
-  });
+  const weakCards = weakSchedulesRaw.map((ws) => ({
+    cardId: ws.cardId,
+    prompt: ws.card?.prompt ?? "Unknown",
+    answer: ws.card?.answer ?? "",
+    deckTitle: ws.card?.deck?.title ?? "Unknown deck",
+    easeFactor: ws.easeFactor,
+    repetitions: ws.repetitions,
+  }));
 
-  const maxBarHeight = 48; // px
+  const maxBarHeight = 48;
   const maxSessionsInDay = Math.max(...trendDays.map((d) => d.sessions), 1);
 
   return (
@@ -172,7 +144,6 @@ export default async function AnalyticsPage() {
         <Mascot expression={trend !== null && trend >= 0 ? "smug" : "happy"} size={48} />
       </div>
 
-      {/* Overview cards */}
       <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
         <Card>
           <CardContent className="pt-4 pb-3">
@@ -196,20 +167,19 @@ export default async function AnalyticsPage() {
         <Card>
           <CardContent className="pt-4 pb-3">
             <p className="text-xs text-muted-foreground">Due Today</p>
-            <p className="text-2xl font-bold">{dueToday ?? 0}</p>
-            <p className="text-xs text-muted-foreground mt-1">+{dueTomorrow ?? 0} tomorrow</p>
+            <p className="text-2xl font-bold">{dueToday}</p>
+            <p className="text-xs text-muted-foreground mt-1">+{dueTomorrow} tomorrow</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="pt-4 pb-3">
             <p className="text-xs text-muted-foreground">Due This Week</p>
-            <p className="text-2xl font-bold">{dueThisWeek ?? 0}</p>
+            <p className="text-2xl font-bold">{dueThisWeek}</p>
             <p className="text-xs text-muted-foreground mt-1">cards to review</p>
           </CardContent>
         </Card>
       </div>
 
-      {/* 30-day activity chart (CSS-only bar chart) */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -249,7 +219,6 @@ export default async function AnalyticsPage() {
         </CardContent>
       </Card>
 
-      {/* Deck mastery rankings */}
       <Card>
         <CardHeader className="pb-2">
           <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -261,7 +230,7 @@ export default async function AnalyticsPage() {
           {deckStats.length === 0 ? (
             <p className="text-sm text-muted-foreground">No decks yet. Create one to start tracking.</p>
           ) : (
-            deckStats.map((deck: { id: string; title: string; cardCount: number; mastery: number | null; sessionCount: number }) => (
+            deckStats.map((deck) => (
               <Link key={deck.id} href={`/decks/${deck.id}`} className="block">
                 <div className="flex items-center justify-between gap-4">
                   <div className="min-w-0 flex-1">
@@ -290,7 +259,6 @@ export default async function AnalyticsPage() {
         </CardContent>
       </Card>
 
-      {/* Weak cards */}
       {weakCards.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
@@ -300,7 +268,7 @@ export default async function AnalyticsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {weakCards.slice(0, 10).map((card: { cardId: string; prompt: string; deckTitle: string; easeFactor: number }) => (
+            {weakCards.slice(0, 10).map((card) => (
               <div key={card.cardId} className="flex items-start justify-between gap-3 py-1.5 border-b border-border/50 last:border-0">
                 <div className="min-w-0 flex-1">
                   <p className="text-sm truncate">{card.prompt}</p>

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { getAuthUser } from "@/lib/auth";
-import { narrowJoin, type DeckOwner } from "@/lib/supabase/types";
+import { prisma } from "@/lib/prisma";
 
 export async function createCard(data: {
   deckId: string;
@@ -23,42 +23,32 @@ export async function createCard(data: {
     if (!Array.isArray(opts) || opts.length < 2) throw new Error("MCQ cards require at least 2 options");
   }
 
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: deck, error: deckError } = await supabase
-    .from("decks")
-    .select("owner_id")
-    .eq("id", data.deckId)
-    .single();
-  if (deckError || !deck || deck.owner_id !== user.id)
-    throw new Error("Deck not found or unauthorized");
+  const deck = await prisma.deck.findUnique({ where: { id: data.deckId }, select: { ownerId: true } });
+  if (!deck || deck.ownerId !== user.id) throw new Error("Deck not found or unauthorized");
 
-  const { data: lastCard } = await supabase
-    .from("cards")
-    .select("position")
-    .eq("deck_id", data.deckId)
-    .order("position", { ascending: false })
-    .limit(1)
-    .single();
+  const lastCard = await prisma.card.findFirst({
+    where: { deckId: data.deckId },
+    orderBy: { position: "desc" },
+    select: { position: true },
+  });
 
   const position = lastCard ? lastCard.position + 1 : 0;
 
-  const { data: card, error } = await supabase
-    .from("cards")
-    .insert({
-      deck_id: data.deckId,
+  const card = await prisma.card.create({
+    data: {
+      deckId: data.deckId,
       type: data.type,
       prompt: data.prompt,
       answer: data.answer,
       explanation: data.explanation ?? null,
-      options: data.options ?? null,
-      cloze_text: data.clozeText ?? null,
+      options: data.options !== undefined ? JSON.stringify(data.options) : null,
+      clozeText: data.clozeText ?? null,
       position,
-      is_draft: true,
-    })
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
+      isDraft: true,
+    },
+  });
 
   revalidatePath(`/decks/${data.deckId}`);
   return card;
@@ -76,126 +66,73 @@ export async function updateCard(
     position?: number;
   }
 ) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: card, error: cardError } = await supabase
-    .from("cards")
-    .select("*, decks(owner_id)")
-    .eq("id", cardId)
-    .single();
-  if (cardError || !card) throw new Error("Card not found or unauthorized");
-
-  const deck = narrowJoin<DeckOwner>(card.decks);
-  if (!deck || deck.owner_id !== user.id) throw new Error("Card not found or unauthorized");
+  const card = await prisma.card.findUnique({
+    where: { id: cardId },
+    include: { deck: { select: { ownerId: true } } },
+  });
+  if (!card || card.deck.ownerId !== user.id) throw new Error("Card not found or unauthorized");
 
   const updatePayload: Record<string, unknown> = {};
   if (data.type !== undefined) updatePayload.type = data.type;
   if (data.prompt !== undefined) updatePayload.prompt = data.prompt;
   if (data.answer !== undefined) updatePayload.answer = data.answer;
   if (data.explanation !== undefined) updatePayload.explanation = data.explanation;
-  if (data.options !== undefined) updatePayload.options = data.options;
-  if (data.clozeText !== undefined) updatePayload.cloze_text = data.clozeText;
+  if (data.options !== undefined) updatePayload.options = JSON.stringify(data.options);
+  if (data.clozeText !== undefined) updatePayload.clozeText = data.clozeText;
   if (data.position !== undefined) updatePayload.position = data.position;
 
-  const { data: updated, error } = await supabase
-    .from("cards")
-    .update(updatePayload)
-    .eq("id", cardId)
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
+  const updated = await prisma.card.update({ where: { id: cardId }, data: updatePayload });
 
-  revalidatePath(`/decks/${card.deck_id}`);
+  revalidatePath(`/decks/${card.deckId}`);
   return updated;
 }
 
 export async function deleteCard(cardId: string) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: card, error: cardError } = await supabase
-    .from("cards")
-    .select("deck_id, decks(owner_id)")
-    .eq("id", cardId)
-    .single();
-  if (cardError || !card) throw new Error("Card not found or unauthorized");
+  const card = await prisma.card.findUnique({
+    where: { id: cardId },
+    include: { deck: { select: { ownerId: true } } },
+  });
+  if (!card || card.deck.ownerId !== user.id) throw new Error("Card not found or unauthorized");
 
-  const deck = narrowJoin<DeckOwner>(card.decks);
-  if (!deck || deck.owner_id !== user.id) throw new Error("Card not found or unauthorized");
+  await prisma.card.delete({ where: { id: cardId } });
 
-  const { error } = await supabase.from("cards").delete().eq("id", cardId);
-  if (error) throw new Error(error.message);
+  const count = await prisma.card.count({ where: { deckId: card.deckId, isDraft: false } });
+  await prisma.deck.update({ where: { id: card.deckId }, data: { cardCount: count } });
 
-  // Sync card_count on the deck
-  const { count } = await supabase
-    .from("cards")
-    .select("*", { count: "exact", head: true })
-    .eq("deck_id", card.deck_id)
-    .eq("is_draft", false);
-  await supabase
-    .from("decks")
-    .update({ card_count: count ?? 0 })
-    .eq("id", card.deck_id);
-
-  revalidatePath(`/decks/${card.deck_id}`);
+  revalidatePath(`/decks/${card.deckId}`);
 }
 
-export async function reorderCards(
-  deckId: string,
-  cardIds: string[]
-) {
-  const { supabase, user } = await getAuthUser();
+export async function reorderCards(deckId: string, cardIds: string[]) {
+  const { user } = await getAuthUser();
 
-  const { data: deck, error: deckError } = await supabase
-    .from("decks")
-    .select("owner_id")
-    .eq("id", deckId)
-    .single();
-  if (deckError || !deck || deck.owner_id !== user.id)
-    throw new Error("Deck not found or unauthorized");
+  const deck = await prisma.deck.findUnique({ where: { id: deckId }, select: { ownerId: true } });
+  if (!deck || deck.ownerId !== user.id) throw new Error("Deck not found or unauthorized");
 
-  const positions = cardIds.map((_, index) => index);
-  const { error: reorderError } = await supabase.rpc("bulk_reorder_cards", {
-    p_deck_id: deckId,
-    p_card_ids: cardIds,
-    p_positions: positions,
-  });
-  if (reorderError) throw new Error(reorderError.message);
+  for (let i = 0; i < cardIds.length; i++) {
+    await prisma.card.update({ where: { id: cardIds[i], deckId }, data: { position: i } });
+  }
 
   revalidatePath(`/decks/${deckId}`);
 }
 
 export async function publishCard(cardId: string) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: card, error: cardError } = await supabase
-    .from("cards")
-    .select("deck_id, decks(owner_id)")
-    .eq("id", cardId)
-    .single();
-  if (cardError || !card) throw new Error("Card not found or unauthorized");
+  const card = await prisma.card.findUnique({
+    where: { id: cardId },
+    include: { deck: { select: { ownerId: true } } },
+  });
+  if (!card || card.deck.ownerId !== user.id) throw new Error("Card not found or unauthorized");
 
-  const deck = narrowJoin<DeckOwner>(card.decks);
-  if (!deck || deck.owner_id !== user.id) throw new Error("Card not found or unauthorized");
+  const updated = await prisma.card.update({ where: { id: cardId }, data: { isDraft: false } });
 
-  const { data: updated, error } = await supabase
-    .from("cards")
-    .update({ is_draft: false })
-    .eq("id", cardId)
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
+  const count = await prisma.card.count({ where: { deckId: card.deckId, isDraft: false } });
+  await prisma.deck.update({ where: { id: card.deckId }, data: { cardCount: count } });
 
-  // Sync card_count on the deck
-  const { count } = await supabase
-    .from("cards")
-    .select("*", { count: "exact", head: true })
-    .eq("deck_id", card.deck_id)
-    .eq("is_draft", false);
-  await supabase
-    .from("decks")
-    .update({ card_count: count ?? 0 })
-    .eq("id", card.deck_id);
-
-  revalidatePath(`/decks/${card.deck_id}`);
+  revalidatePath(`/decks/${card.deckId}`);
   return updated;
 }

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { getAuthUser } from "@/lib/auth";
 import { sm2, ratingToQuality } from "@/lib/sm2";
+import { prisma } from "@/lib/prisma";
 
 function fisherYatesShuffle<T>(arr: T[]): T[] {
   const shuffled = [...arr];
@@ -18,268 +19,210 @@ export async function startSession(data: {
   mode: "LEARN" | "QUIZ" | "TEST";
   filter?: "due" | "weak" | "all";
 }) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: deck, error: deckError } = await supabase
-    .from("decks")
-    .select("owner_id")
-    .eq("id", data.deckId)
-    .single();
-  if (deckError || !deck) throw new Error("Deck not found");
-  if (deck.owner_id !== user.id) throw new Error("Unauthorized");
+  const deck = await prisma.deck.findUnique({
+    where: { id: data.deckId },
+    select: { ownerId: true },
+  });
+  if (!deck) throw new Error("Deck not found");
+  if (deck.ownerId !== user.id) throw new Error("Unauthorized");
 
   let cards: unknown[];
-  const now = new Date().toISOString();
+  const now = new Date();
   const filter = data.filter ?? "due";
 
   if (filter === "weak") {
-    // Weak cards only: low ease factor across the deck
-    const { data: weakSchedules } = await supabase
-      .from("review_schedules")
-      .select("card_id")
-      .eq("user_id", user.id)
-      .lt("ease_factor", 2.0)
-      .order("ease_factor", { ascending: true })
-      .limit(20);
+    const weakSchedules = await prisma.reviewSchedule.findMany({
+      where: { userId: user.id, easeFactor: { lt: 2.0 } },
+      orderBy: { easeFactor: "asc" },
+      take: 20,
+      select: { cardId: true },
+    });
 
-    const weakIds = (weakSchedules ?? []).map((r: { card_id: string }) => r.card_id);
+    const weakIds = weakSchedules.map((r) => r.cardId);
 
     if (weakIds.length > 0) {
-      const { data: weakCards } = await supabase
-        .from("cards")
-        .select("*")
-        .eq("deck_id", data.deckId)
-        .eq("is_draft", false)
-        .in("id", weakIds)
-        .limit(20);
-      cards = weakCards ?? [];
+      cards = await prisma.card.findMany({
+        where: { deckId: data.deckId, isDraft: false, id: { in: weakIds } },
+        take: 20,
+      });
     } else {
       cards = [];
     }
   } else if (filter === "all") {
-    // All cards in the deck regardless of schedule
-    const { data: allCards } = await supabase
-      .from("cards")
-      .select("*")
-      .eq("deck_id", data.deckId)
-      .eq("is_draft", false)
-      .order("position", { ascending: true })
-      .limit(20);
-    cards = fisherYatesShuffle(allCards ?? []);
+    const allCards = await prisma.card.findMany({
+      where: { deckId: data.deckId, isDraft: false },
+      orderBy: { position: "asc" },
+      take: 20,
+    });
+    cards = fisherYatesShuffle(allCards);
   } else if (data.mode === "LEARN") {
-    // Default "due" filter: cards with a review schedule due now
-    const { data: scheduledCardIds } = await supabase
-      .from("review_schedules")
-      .select("card_id")
-      .eq("user_id", user.id)
-      .lte("next_review_at", now)
-      .limit(20);
+    const dueSchedules = await prisma.reviewSchedule.findMany({
+      where: { userId: user.id, nextReviewAt: { lte: now } },
+      orderBy: { nextReviewAt: "asc" },
+      take: 20,
+      select: { cardId: true },
+    });
 
-    const scheduledIds = (scheduledCardIds ?? []).map((r: { card_id: string }) => r.card_id);
+    const scheduledIds = dueSchedules.map((r) => r.cardId);
 
     let scheduled: unknown[] = [];
     if (scheduledIds.length > 0) {
-      const { data: scheduledCards } = await supabase
-        .from("cards")
-        .select("*")
-        .eq("deck_id", data.deckId)
-        .eq("is_draft", false)
-        .in("id", scheduledIds)
-        .limit(20);
-      scheduled = scheduledCards ?? [];
+      scheduled = await prisma.card.findMany({
+        where: { deckId: data.deckId, isDraft: false, id: { in: scheduledIds } },
+        take: 20,
+      });
     }
 
     // Cards never reviewed (no review_schedule entry)
-    const { data: allCardIds } = await supabase
-      .from("cards")
-      .select("id")
-      .eq("deck_id", data.deckId)
-      .eq("is_draft", false);
+    const allCardIds = await prisma.card.findMany({
+      where: { deckId: data.deckId, isDraft: false },
+      select: { id: true },
+    });
 
-    const deckCardIds = (allCardIds ?? []).map((c: { id: string }) => c.id);
+    const deckCardIds = allCardIds.map((c) => c.id);
 
-    // Only query review_schedules for this deck's cards, not ALL cards
-    const { data: reviewedCardIds } = deckCardIds.length > 0
-      ? await supabase
-          .from("review_schedules")
-          .select("card_id")
-          .eq("user_id", user.id)
-          .in("card_id", deckCardIds)
-      : { data: [] };
+    const reviewedSchedules = deckCardIds.length > 0
+      ? await prisma.reviewSchedule.findMany({
+          where: { userId: user.id, cardId: { in: deckCardIds } },
+          select: { cardId: true },
+        })
+      : [];
 
-    const reviewedSet = new Set((reviewedCardIds ?? []).map((r: { card_id: string }) => r.card_id));
-    const unscheduledIds = (allCardIds ?? [])
-      .map((c: { id: string }) => c.id)
-      .filter((id: string) => !reviewedSet.has(id));
+    const reviewedSet = new Set(reviewedSchedules.map((r) => r.cardId));
+    const unscheduledIds = deckCardIds.filter((id) => !reviewedSet.has(id));
 
     let unscheduled: unknown[] = [];
     const needed = 20 - scheduled.length;
     if (needed > 0 && unscheduledIds.length > 0) {
-      const { data: unscheduledCards } = await supabase
-        .from("cards")
-        .select("*")
-        .eq("deck_id", data.deckId)
-        .eq("is_draft", false)
-        .in("id", unscheduledIds)
-        .limit(needed);
-      unscheduled = unscheduledCards ?? [];
+      unscheduled = await prisma.card.findMany({
+        where: { deckId: data.deckId, isDraft: false, id: { in: unscheduledIds } },
+        take: needed,
+      });
     }
 
     cards = [...scheduled, ...unscheduled].slice(0, 20);
   } else if (data.mode === "QUIZ") {
-    const { data: quizCards } = await supabase
-      .from("cards")
-      .select("*")
-      .eq("deck_id", data.deckId)
-      .eq("is_draft", false)
-      .order("position", { ascending: true })
-      .limit(20);
-    cards = fisherYatesShuffle(quizCards ?? []);
+    const quizCards = await prisma.card.findMany({
+      where: { deckId: data.deckId, isDraft: false },
+      orderBy: { position: "asc" },
+      take: 20,
+    });
+    cards = fisherYatesShuffle(quizCards);
   } else {
-    const { data: testCards } = await supabase
-      .from("cards")
-      .select("*")
-      .eq("deck_id", data.deckId)
-      .eq("is_draft", false)
-      .order("position", { ascending: true });
-    cards = testCards ?? [];
+    cards = await prisma.card.findMany({
+      where: { deckId: data.deckId, isDraft: false },
+      orderBy: { position: "asc" },
+    });
   }
 
   // Abandon any previous incomplete sessions for this deck
-  await supabase
-    .from("study_sessions")
-    .update({ completed_at: new Date().toISOString() })
-    .eq("user_id", user.id)
-    .eq("deck_id", data.deckId)
-    .is("completed_at", null);
+  await prisma.studySession.updateMany({
+    where: { userId: user.id, deckId: data.deckId, completedAt: null },
+    data: { completedAt: new Date() },
+  });
 
-  const { data: session, error: sessionError } = await supabase
-    .from("study_sessions")
-    .insert({
-      user_id: user.id,
-      deck_id: data.deckId,
+  const session = await prisma.studySession.create({
+    data: {
+      userId: user.id,
+      deckId: data.deckId,
       mode: data.mode,
-      total_cards: cards.length,
-    })
-    .select()
-    .single();
-  if (sessionError) throw new Error(sessionError.message);
+      totalCards: cards.length,
+    },
+  });
 
   return { session, cards };
 }
 
 export async function startQuickReview() {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const now = new Date().toISOString();
+  const now = new Date();
 
-  // Get 5 due cards across ALL decks
-  const { data: dueSchedules } = await supabase
-    .from("review_schedules")
-    .select("card_id")
-    .eq("user_id", user.id)
-    .lte("next_review_at", now)
-    .order("next_review_at", { ascending: true })
-    .limit(5);
+  const dueSchedules = await prisma.reviewSchedule.findMany({
+    where: { userId: user.id, nextReviewAt: { lte: now } },
+    orderBy: { nextReviewAt: "asc" },
+    take: 5,
+    select: { cardId: true },
+  });
 
-  const dueCardIds = (dueSchedules ?? []).map((r: { card_id: string }) => r.card_id);
+  const dueCardIds = dueSchedules.map((r) => r.cardId);
 
   if (dueCardIds.length === 0) {
     return { session: null, cards: [], deckId: null };
   }
 
-  // Fetch cards and their deck info
-  const { data: cards } = await supabase
-    .from("cards")
-    .select("*, decks!inner(owner_id)")
-    .in("id", dueCardIds)
-    .eq("is_draft", false)
-    .eq("decks.owner_id", user.id);
+  const cards = await prisma.card.findMany({
+    where: { id: { in: dueCardIds }, isDraft: false, deck: { ownerId: user.id } },
+  });
 
-  const cardList = fisherYatesShuffle(cards ?? []);
+  const cardList = fisherYatesShuffle(cards);
   if (cardList.length === 0) {
     return { session: null, cards: [], deckId: null };
   }
 
-  // Use the first card's deck_id for the session (mixed-deck sessions use first deck as anchor)
-  const anchorDeckId = (cardList[0] as { deck_id: string }).deck_id;
+  const anchorDeckId = cardList[0].deckId;
 
-  // Abandon any previous incomplete sessions for quick review
-  await supabase
-    .from("study_sessions")
-    .update({ completed_at: new Date().toISOString() })
-    .eq("user_id", user.id)
-    .eq("deck_id", anchorDeckId)
-    .is("completed_at", null);
+  await prisma.studySession.updateMany({
+    where: { userId: user.id, deckId: anchorDeckId, completedAt: null },
+    data: { completedAt: new Date() },
+  });
 
-  const { data: session, error: sessionError } = await supabase
-    .from("study_sessions")
-    .insert({
-      user_id: user.id,
-      deck_id: anchorDeckId,
+  const session = await prisma.studySession.create({
+    data: {
+      userId: user.id,
+      deckId: anchorDeckId,
       mode: "QUIZ",
-      total_cards: cardList.length,
-    })
-    .select()
-    .single();
-  if (sessionError) throw new Error(sessionError.message);
+      totalCards: cardList.length,
+    },
+  });
 
   return { session, cards: cardList, deckId: anchorDeckId };
 }
 
 export async function startStudyAllDue() {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const now = new Date().toISOString();
+  const now = new Date();
 
-  // Get ALL due cards across ALL decks (up to 50 for reasonable session length)
-  const { data: dueSchedules } = await supabase
-    .from("review_schedules")
-    .select("card_id")
-    .eq("user_id", user.id)
-    .lte("next_review_at", now)
-    .order("next_review_at", { ascending: true })
-    .limit(50);
+  const dueSchedules = await prisma.reviewSchedule.findMany({
+    where: { userId: user.id, nextReviewAt: { lte: now } },
+    orderBy: { nextReviewAt: "asc" },
+    take: 50,
+    select: { cardId: true },
+  });
 
-  const dueCardIds = (dueSchedules ?? []).map((r: { card_id: string }) => r.card_id);
+  const dueCardIds = dueSchedules.map((r) => r.cardId);
 
   if (dueCardIds.length === 0) {
     return { session: null, cards: [], deckId: null };
   }
 
-  // Fetch cards with ownership check
-  const { data: cards } = await supabase
-    .from("cards")
-    .select("*, decks!inner(owner_id)")
-    .in("id", dueCardIds)
-    .eq("is_draft", false)
-    .eq("decks.owner_id", user.id);
+  const cards = await prisma.card.findMany({
+    where: { id: { in: dueCardIds }, isDraft: false, deck: { ownerId: user.id } },
+  });
 
-  const cardList = fisherYatesShuffle(cards ?? []);
+  const cardList = fisherYatesShuffle(cards);
   if (cardList.length === 0) {
     return { session: null, cards: [], deckId: null };
   }
 
-  const anchorDeckId = (cardList[0] as { deck_id: string }).deck_id;
+  const anchorDeckId = cardList[0].deckId;
 
-  await supabase
-    .from("study_sessions")
-    .update({ completed_at: new Date().toISOString() })
-    .eq("user_id", user.id)
-    .eq("deck_id", anchorDeckId)
-    .is("completed_at", null);
+  await prisma.studySession.updateMany({
+    where: { userId: user.id, deckId: anchorDeckId, completedAt: null },
+    data: { completedAt: new Date() },
+  });
 
-  const { data: session, error: sessionError } = await supabase
-    .from("study_sessions")
-    .insert({
-      user_id: user.id,
-      deck_id: anchorDeckId,
+  const session = await prisma.studySession.create({
+    data: {
+      userId: user.id,
+      deckId: anchorDeckId,
       mode: "LEARN",
-      total_cards: cardList.length,
-    })
-    .select()
-    .single();
-  if (sessionError) throw new Error(sessionError.message);
+      totalCards: cardList.length,
+    },
+  });
 
   return { session, cards: cardList, deckId: anchorDeckId };
 }
@@ -288,58 +231,46 @@ export async function startRetrySession(data: {
   deckId: string;
   previousSessionId: string;
 }) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  // Verify deck ownership
-  const { data: deck, error: deckError } = await supabase
-    .from("decks")
-    .select("owner_id")
-    .eq("id", data.deckId)
-    .single();
-  if (deckError || !deck) throw new Error("Deck not found");
-  if (deck.owner_id !== user.id) throw new Error("Unauthorized");
+  const deck = await prisma.deck.findUnique({
+    where: { id: data.deckId },
+    select: { ownerId: true },
+  });
+  if (!deck) throw new Error("Deck not found");
+  if (deck.ownerId !== user.id) throw new Error("Unauthorized");
 
-  // Verify previous session belongs to user
-  const { data: prevSession, error: prevError } = await supabase
-    .from("study_sessions")
-    .select("id, user_id, deck_id")
-    .eq("id", data.previousSessionId)
-    .single();
-  if (prevError || !prevSession || prevSession.user_id !== user.id)
+  const prevSession = await prisma.studySession.findUnique({
+    where: { id: data.previousSessionId },
+    select: { id: true, userId: true, deckId: true },
+  });
+  if (!prevSession || prevSession.userId !== user.id)
     throw new Error("Previous session not found");
-  if (prevSession.deck_id !== data.deckId)
+  if (prevSession.deckId !== data.deckId)
     throw new Error("Session does not belong to this deck");
 
-  // Get missed card IDs from previous session
-  const { data: missedAnswers } = await supabase
-    .from("session_answers")
-    .select("card_id")
-    .eq("session_id", data.previousSessionId)
-    .eq("is_correct", false);
+  const missedAnswers = await prisma.sessionAnswer.findMany({
+    where: { sessionId: data.previousSessionId, isCorrect: false },
+    select: { cardId: true },
+  });
 
-  const missedIds = (missedAnswers ?? []).map((a: { card_id: string }) => a.card_id);
+  const missedIds = missedAnswers.map((a) => a.cardId);
   if (missedIds.length === 0) throw new Error("No missed cards in that session");
 
-  // Fetch the actual card data
-  const { data: cards } = await supabase
-    .from("cards")
-    .select("*")
-    .in("id", missedIds);
+  const cards = await prisma.card.findMany({
+    where: { id: { in: missedIds } },
+  });
 
-  const cardList = cards ?? [];
+  const cardList = cards;
 
-  // Create a new session for the retry
-  const { data: session, error: sessionError } = await supabase
-    .from("study_sessions")
-    .insert({
-      user_id: user.id,
-      deck_id: data.deckId,
+  const session = await prisma.studySession.create({
+    data: {
+      userId: user.id,
+      deckId: data.deckId,
       mode: "QUIZ",
-      total_cards: cardList.length,
-    })
-    .select()
-    .single();
-  if (sessionError) throw new Error(sessionError.message);
+      totalCards: cardList.length,
+    },
+  });
 
   return { session, cards: cardList };
 }
@@ -402,60 +333,39 @@ export async function submitAnswer(data: {
   responseTimeMs?: number;
   rating?: "again" | "hard" | "good" | "easy";
 }) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: session, error: sessionError } = await supabase
-    .from("study_sessions")
-    .select("*")
-    .eq("id", data.sessionId)
-    .single();
-  if (sessionError || !session || session.user_id !== user.id)
+  const session = await prisma.studySession.findUnique({
+    where: { id: data.sessionId },
+  });
+  if (!session || session.userId !== user.id)
     throw new Error("Session not found or unauthorized");
 
-  const { data: card, error: cardError } = await supabase
-    .from("cards")
-    .select("deck_id, type, answer, prompt, cloze_text")
-    .eq("id", data.cardId)
-    .single();
-  if (cardError || !card || card.deck_id !== session.deck_id)
+  const card = await prisma.card.findUnique({
+    where: { id: data.cardId },
+    select: { deckId: true, type: true, answer: true, prompt: true, clozeText: true },
+  });
+  if (!card || card.deckId !== session.deckId)
     throw new Error("Card does not belong to this session's deck");
 
-  const serverValidated = await validateAnswer(card.type, card.answer, card.cloze_text, card.prompt, data.userResponse);
-  // Never trust client isCorrect — if server can't validate, treat as client's value
-  // but log that server validation was skipped for this card type
+  const serverValidated = await validateAnswer(card.type, card.answer, card.clozeText, card.prompt, data.userResponse);
   const isCorrect = serverValidated !== null ? serverValidated : data.isCorrect;
 
-  const { data: answer, error: answerError } = await supabase
-    .from("session_answers")
-    .insert({
-      session_id: data.sessionId,
-      card_id: data.cardId,
-      is_correct: isCorrect,
+  const answer = await prisma.sessionAnswer.create({
+    data: {
+      sessionId: data.sessionId,
+      cardId: data.cardId,
+      isCorrect,
       confidence: data.confidence ?? null,
-      response_time_ms: data.responseTimeMs ?? null,
-    })
-    .select()
-    .single();
-  if (answerError) throw new Error(answerError.message);
+      responseTimeMs: data.responseTimeMs ?? null,
+    },
+  });
 
   if (isCorrect) {
-    const { error: incrError } = await supabase.rpc("increment_correct_count", {
-      session_id: data.sessionId,
+    await prisma.studySession.update({
+      where: { id: data.sessionId },
+      data: { correctCount: { increment: 1 } },
     });
-    if (incrError) {
-      // Fallback: fetch and update manually
-      const { data: currentSession } = await supabase
-        .from("study_sessions")
-        .select("correct_count")
-        .eq("id", data.sessionId)
-        .single();
-      if (currentSession) {
-        await supabase
-          .from("study_sessions")
-          .update({ correct_count: (currentSession.correct_count ?? 0) + 1 })
-          .eq("id", data.sessionId);
-      }
-    }
   }
 
   // Update spaced repetition for LEARN (uses explicit rating) and QUIZ (derives quality from correctness)
@@ -464,91 +374,76 @@ export async function submitAnswer(data: {
     session.mode === "QUIZ";
 
   if (shouldUpdateSchedule) {
-    // LEARN mode: use explicit rating. QUIZ mode: correct = quality 4, incorrect = quality 1
     const quality = data.rating
       ? ratingToQuality(data.rating)
       : isCorrect ? 4 : 1;
 
-    const { data: existing } = await supabase
-      .from("review_schedules")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("card_id", data.cardId)
-      .single();
+    const existing = await prisma.reviewSchedule.findUnique({
+      where: { userId_cardId: { userId: user.id, cardId: data.cardId } },
+    });
 
     const sm2Result = sm2({
       quality,
-      easeFactor: existing?.ease_factor ?? 2.5,
-      intervalDays: existing?.interval_days ?? 0,
+      easeFactor: existing?.easeFactor ?? 2.5,
+      intervalDays: existing?.intervalDays ?? 0,
       repetitions: existing?.repetitions ?? 0,
     });
 
-    const now = new Date().toISOString();
-
-    if (existing) {
-      const { error: scheduleError } = await supabase
-        .from("review_schedules")
-        .update({
-          ease_factor: sm2Result.easeFactor,
-          interval_days: sm2Result.intervalDays,
-          repetitions: sm2Result.repetitions,
-          next_review_at: sm2Result.nextReviewAt.toISOString(),
-          last_reviewed_at: now,
-        })
-        .eq("user_id", user.id)
-        .eq("card_id", data.cardId);
-      if (scheduleError) throw new Error(`Failed to update review schedule: ${scheduleError.message}`);
-    } else {
-      const { error: scheduleError } = await supabase.from("review_schedules").insert({
-        user_id: user.id,
-        card_id: data.cardId,
-        ease_factor: sm2Result.easeFactor,
-        interval_days: sm2Result.intervalDays,
+    await prisma.reviewSchedule.upsert({
+      where: { userId_cardId: { userId: user.id, cardId: data.cardId } },
+      update: {
+        easeFactor: sm2Result.easeFactor,
+        intervalDays: sm2Result.intervalDays,
         repetitions: sm2Result.repetitions,
-        next_review_at: sm2Result.nextReviewAt.toISOString(),
-        last_reviewed_at: now,
-      });
-      if (scheduleError) throw new Error(`Failed to create review schedule: ${scheduleError.message}`);
-    }
+        nextReviewAt: sm2Result.nextReviewAt,
+        lastReviewedAt: new Date(),
+      },
+      create: {
+        userId: user.id,
+        cardId: data.cardId,
+        easeFactor: sm2Result.easeFactor,
+        intervalDays: sm2Result.intervalDays,
+        repetitions: sm2Result.repetitions,
+        nextReviewAt: sm2Result.nextReviewAt,
+        lastReviewedAt: new Date(),
+      },
+    });
   }
 
   return answer;
 }
 
 export async function completeSession(sessionId: string, durationSeconds: number) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: session, error: sessionError } = await supabase
-    .from("study_sessions")
-    .select("user_id, deck_id")
-    .eq("id", sessionId)
-    .single();
-  if (sessionError || !session || session.user_id !== user.id)
+  const session = await prisma.studySession.findUnique({
+    where: { id: sessionId },
+    select: { userId: true, deckId: true },
+  });
+  if (!session || session.userId !== user.id)
     throw new Error("Session not found or unauthorized");
 
   const now = new Date();
 
-  const { data: completed, error } = await supabase
-    .from("study_sessions")
-    .update({
-      completed_at: now.toISOString(),
-      duration_seconds: durationSeconds,
-    })
-    .eq("id", sessionId)
-    .select()
-    .single();
-  if (error) throw new Error(error.message);
+  const completed = await prisma.studySession.update({
+    where: { id: sessionId },
+    data: {
+      completedAt: now,
+      durationSeconds,
+    },
+  });
 
   // Clean up any other orphaned incomplete sessions for this deck
-  await supabase
-    .from("study_sessions")
-    .update({ completed_at: now.toISOString() })
-    .eq("user_id", user.id)
-    .eq("deck_id", session.deck_id)
-    .is("completed_at", null);
+  await prisma.studySession.updateMany({
+    where: { userId: user.id, deckId: session.deckId, completedAt: null },
+    data: { completedAt: now },
+  });
 
-  // Update streak (with streak freeze support)
-  const lastUpdated = user.streak_updated_at ? new Date(user.streak_updated_at) : null;
+  // Fetch fresh user data for streak (user from auth may be stale)
+  const freshUser = await prisma.user.findUnique({ where: { id: user.id } });
+  if (!freshUser) throw new Error("User not found");
+
+  const lastUpdated = freshUser.streakUpdatedAt ? new Date(freshUser.streakUpdatedAt) : null;
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const lastDay = lastUpdated
     ? new Date(lastUpdated.getFullYear(), lastUpdated.getMonth(), lastUpdated.getDate())
@@ -559,10 +454,9 @@ export async function completeSession(sessionId: string, durationSeconds: number
     : null;
 
   // Reset streak freeze availability every Monday
-  const freezeUsedAt = user.streak_freeze_used_at ? new Date(user.streak_freeze_used_at) : null;
-  let freezeAvailable = user.streak_freeze_available ?? true;
+  const freezeUsedAt = freshUser.streakFreezeUsedAt ? new Date(freshUser.streakFreezeUsedAt) : null;
+  let freezeAvailable = freshUser.streakFreezeAvailable ?? true;
   if (freezeUsedAt) {
-    // Find start of current week (Monday)
     const dayOfWeek = now.getDay();
     const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
     const thisMonday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset);
@@ -571,88 +465,75 @@ export async function completeSession(sessionId: string, durationSeconds: number
     }
   }
 
-  let streakCount = user.streak_count ?? 0;
+  let streakCount = freshUser.streakCount ?? 0;
   let usedFreeze = false;
 
   if (diffDays === null || diffDays > 2) {
-    // Too many days missed, even freeze can't help
     streakCount = 1;
   } else if (diffDays === 2 && freezeAvailable) {
-    // Missed exactly 1 day — use streak freeze
-    streakCount = (user.streak_count ?? 0) + 1;
+    streakCount = (freshUser.streakCount ?? 0) + 1;
     usedFreeze = true;
   } else if (diffDays === 2 && !freezeAvailable) {
-    // Missed 1 day but no freeze available
     streakCount = 1;
   } else if (diffDays === 1) {
-    streakCount = (user.streak_count ?? 0) + 1;
+    streakCount = (freshUser.streakCount ?? 0) + 1;
   }
   // diffDays === 0: same day, keep current streak
 
   const updateData: Record<string, unknown> = {
-    streak_count: streakCount,
-    streak_updated_at: now.toISOString(),
+    streakCount,
+    streakUpdatedAt: now,
   };
 
   if (usedFreeze) {
-    updateData.streak_freeze_available = false;
-    updateData.streak_freeze_used_at = now.toISOString();
-  } else if (freezeAvailable !== (user.streak_freeze_available ?? true)) {
-    // Reset freeze if it was refreshed this week
-    updateData.streak_freeze_available = freezeAvailable;
+    updateData.streakFreezeAvailable = false;
+    updateData.streakFreezeUsedAt = now;
+  } else if (freezeAvailable !== (freshUser.streakFreezeAvailable ?? true)) {
+    updateData.streakFreezeAvailable = freezeAvailable;
   }
 
-  await supabase
-    .from("users")
-    .update(updateData)
-    .eq("id", user.id);
+  await prisma.user.update({
+    where: { id: user.id },
+    data: updateData,
+  });
 
   revalidatePath("/");
   return completed;
 }
 
 export async function getIncompleteSession(deckId: string) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  // Find the most recent incomplete session for this deck
-  const { data: session, error } = await supabase
-    .from("study_sessions")
-    .select("id, mode, total_cards, correct_count, created_at")
-    .eq("user_id", user.id)
-    .eq("deck_id", deckId)
-    .is("completed_at", null)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  const session = await prisma.studySession.findFirst({
+    where: { userId: user.id, deckId, completedAt: null },
+    orderBy: { createdAt: "desc" },
+  });
 
-  if (error) throw new Error(error.message);
   if (!session) return null;
 
-  // Get answered card IDs for this session
-  const { data: answers, error: answersError } = await supabase
-    .from("session_answers")
-    .select("card_id")
-    .eq("session_id", session.id);
-  if (answersError) throw new Error(answersError.message);
+  const answers = await prisma.sessionAnswer.findMany({
+    where: { sessionId: session.id },
+    select: { cardId: true },
+  });
 
-  const answeredCardIds = (answers ?? []).map((a: { card_id: string }) => a.card_id);
+  const answeredCardIds = answers.map((a) => a.cardId);
 
   // Auto-abandon if all cards answered (session should have been completed)
-  if (answeredCardIds.length >= session.total_cards) {
-    await supabase
-      .from("study_sessions")
-      .update({ completed_at: new Date().toISOString() })
-      .eq("id", session.id);
+  if (answeredCardIds.length >= session.totalCards) {
+    await prisma.studySession.update({
+      where: { id: session.id },
+      data: { completedAt: new Date() },
+    });
     return null;
   }
 
   return {
     sessionId: session.id,
     mode: session.mode as "LEARN" | "QUIZ" | "TEST",
-    totalCards: session.total_cards,
+    totalCards: session.totalCards,
     answeredCards: answeredCardIds.length,
     answeredCardIds,
-    createdAt: session.created_at,
+    createdAt: session.createdAt.toISOString(),
   };
 }
 
@@ -661,75 +542,62 @@ export async function updateAnswerConfidence(data: {
   cardId: string;
   confidence: number;
 }) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: session } = await supabase
-    .from("study_sessions")
-    .select("user_id")
-    .eq("id", data.sessionId)
-    .single();
-  if (!session || session.user_id !== user.id) return;
+  const session = await prisma.studySession.findUnique({
+    where: { id: data.sessionId },
+    select: { userId: true },
+  });
+  if (!session || session.userId !== user.id) return;
 
-  await supabase
-    .from("session_answers")
-    .update({ confidence: data.confidence })
-    .eq("session_id", data.sessionId)
-    .eq("card_id", data.cardId);
+  await prisma.sessionAnswer.updateMany({
+    where: { sessionId: data.sessionId, cardId: data.cardId },
+    data: { confidence: data.confidence },
+  });
 }
 
 export async function abandonSession(sessionId: string) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: session, error: sessionError } = await supabase
-    .from("study_sessions")
-    .select("user_id, completed_at")
-    .eq("id", sessionId)
-    .single();
-  if (sessionError || !session || session.user_id !== user.id)
+  const session = await prisma.studySession.findUnique({
+    where: { id: sessionId },
+    select: { userId: true, completedAt: true },
+  });
+  if (!session || session.userId !== user.id)
     throw new Error("Session not found or unauthorized");
-  if (session.completed_at) throw new Error("Session already completed");
+  if (session.completedAt) throw new Error("Session already completed");
 
-  const { error } = await supabase
-    .from("study_sessions")
-    .update({ completed_at: new Date().toISOString() })
-    .eq("id", sessionId);
-  if (error) throw new Error(error.message);
+  await prisma.studySession.update({
+    where: { id: sessionId },
+    data: { completedAt: new Date() },
+  });
 
   return { success: true };
 }
 
 export async function resumeSession(sessionId: string) {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: session, error: sessionError } = await supabase
-    .from("study_sessions")
-    .select("*")
-    .eq("id", sessionId)
-    .single();
-  if (sessionError || !session || session.user_id !== user.id)
+  const session = await prisma.studySession.findUnique({
+    where: { id: sessionId },
+  });
+  if (!session || session.userId !== user.id)
     throw new Error("Session not found or unauthorized");
-  if (session.completed_at) throw new Error("Session already completed");
+  if (session.completedAt) throw new Error("Session already completed");
 
-  // Get already-answered card IDs
-  const { data: answers } = await supabase
-    .from("session_answers")
-    .select("card_id")
-    .eq("session_id", sessionId);
-  const answeredIds = new Set((answers ?? []).map((a: { card_id: string }) => a.card_id));
+  const answers = await prisma.sessionAnswer.findMany({
+    where: { sessionId },
+    select: { cardId: true },
+  });
+  const answeredIds = new Set(answers.map((a) => a.cardId));
 
-  // Fetch all cards in the deck (matching original session logic)
-  const { data: allCards } = await supabase
-    .from("cards")
-    .select("*")
-    .eq("deck_id", session.deck_id)
-    .eq("is_draft", false)
-    .order("position", { ascending: true })
-    .limit(session.total_cards);
+  const allCards = await prisma.card.findMany({
+    where: { deckId: session.deckId, isDraft: false },
+    orderBy: { position: "asc" },
+    take: session.totalCards,
+  });
 
-  // Filter to only unanswered cards
-  const remainingCards = (allCards ?? []).filter(
-    (c: { id: string }) => !answeredIds.has(c.id)
-  );
+  const remainingCards = allCards.filter((c) => !answeredIds.has(c.id));
 
   return { session, cards: remainingCards };
 }

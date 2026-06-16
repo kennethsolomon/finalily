@@ -7,9 +7,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
-import { createClient } from "@/lib/supabase/client";
 import { updateProfile } from "@/actions/profile";
 import { getAIConfig, updateAIConfig, testAIConnection, clearAIConfig } from "@/actions/ai-config";
 import { ThemePicker } from "@/components/theme-picker";
@@ -40,7 +39,6 @@ const SUBJECTS = [
 export default function SettingsPage() {
   const router = useRouter();
   const [displayName, setDisplayName] = useState("");
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
   const [weeklyGoal, setWeeklyGoal] = useState(5);
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>([]);
   const [notificationStatus, setNotificationStatus] = useState<string>("default");
@@ -59,23 +57,17 @@ export default function SettingsPage() {
 
   useEffect(() => {
     async function load() {
-      const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) {
+      const { getProfile } = await import("@/actions/profile");
+      const profile = await getProfile();
+      if (!profile) {
         router.push("/auth/login");
         return;
       }
-      setAvatarUrl(user.user_metadata?.avatar_url ?? null);
+      setDisplayName(profile.displayName ?? "");
+      setWeeklyGoal(profile.weeklyGoal ?? 5);
+      const prefs = JSON.parse(profile.preferences || "{}") as Record<string, unknown>;
+      setSelectedSubjects((prefs.subjects as string[]) ?? []);
       setNotificationStatus(getNotificationPermission());
-
-      const { getProfile } = await import("@/actions/profile");
-      const profile = await getProfile();
-      if (profile) {
-        setDisplayName((profile as Record<string, unknown>).display_name as string ?? "");
-        setWeeklyGoal((profile as Record<string, unknown>).weekly_goal as number ?? 5);
-        const prefs = ((profile as Record<string, unknown>).preferences as Record<string, unknown>) ?? {};
-        setSelectedSubjects((prefs.subjects as string[]) ?? []);
-      }
 
       // Load AI config
       const aiCfg = await getAIConfig();
@@ -110,14 +102,23 @@ export default function SettingsPage() {
   async function handleChangePassword() {
     if (!newPassword) return;
     setChangingPassword(true);
-    const supabase = createClient();
-    const { error } = await supabase.auth.updateUser({ password: newPassword });
-    setChangingPassword(false);
-    setNewPassword("");
-    if (error) {
-      toast.error("Failed to update password", { description: error.message });
-    } else {
-      toast.success("Password updated");
+    try {
+      const res = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password: newPassword }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to update password");
+      } else {
+        toast.success("Password updated");
+        setNewPassword("");
+      }
+    } catch {
+      toast.error("Failed to update password");
+    } finally {
+      setChangingPassword(false);
     }
   }
 
@@ -192,8 +193,7 @@ export default function SettingsPage() {
   }
 
   async function handleSignOut() {
-    const supabase = createClient();
-    await supabase.auth.signOut();
+    await fetch("/api/auth/logout", { method: "POST" });
     router.push("/auth/login");
   }
 
@@ -214,10 +214,8 @@ export default function SettingsPage() {
         <Separator />
         <div className="flex items-center gap-4">
           <Avatar className="size-16">
-            {avatarUrl && <AvatarImage src={avatarUrl} alt={displayName} />}
             <AvatarFallback>{initials}</AvatarFallback>
           </Avatar>
-          <p className="text-sm text-muted-foreground">Avatar is synced from your login provider.</p>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="display-name">Display name</Label>

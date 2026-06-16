@@ -1,38 +1,22 @@
 "use server";
 
 import { getAuthUser } from "@/lib/auth";
-
-interface ExportCard {
-  id: string;
-  type: string;
-  prompt: string;
-  answer: string;
-  explanation: string | null;
-  options: unknown;
-  cloze_text: string | null;
-  position: number;
-}
+import { prisma } from "@/lib/prisma";
 
 export async function exportDeck(deckId: string, format: "json" | "csv") {
-  const { supabase, user } = await getAuthUser();
+  const { user } = await getAuthUser();
 
-  const { data: deck, error: deckError } = await supabase
-    .from("decks")
-    .select("id, title, subject, description, source_type")
-    .eq("id", deckId)
-    .eq("owner_id", user.id)
-    .single();
-  if (deckError || !deck) throw new Error("Deck not found or unauthorized");
+  const deck = await prisma.deck.findUnique({
+    where: { id: deckId },
+    select: { id: true, title: true, subject: true, description: true, sourceType: true, ownerId: true },
+  });
+  if (!deck || deck.ownerId !== user.id) throw new Error("Deck not found or unauthorized");
 
-  const { data: cards, error: cardsError } = await supabase
-    .from("cards")
-    .select("id, type, prompt, answer, explanation, options, cloze_text, position")
-    .eq("deck_id", deckId)
-    .eq("is_draft", false)
-    .order("position", { ascending: true });
-  if (cardsError) throw new Error(cardsError.message);
-
-  const cardList = (cards ?? []) as ExportCard[];
+  const cards = await prisma.card.findMany({
+    where: { deckId, isDraft: false },
+    orderBy: { position: "asc" },
+    select: { id: true, type: true, prompt: true, answer: true, explanation: true, options: true, clozeText: true, position: true },
+  });
 
   if (format === "json") {
     const exportData = {
@@ -41,16 +25,16 @@ export async function exportDeck(deckId: string, format: "json" | "csv") {
         subject: deck.subject,
         description: deck.description,
       },
-      cards: cardList.map((c) => ({
+      cards: cards.map((c) => ({
         type: c.type,
         prompt: c.prompt,
         answer: c.answer,
         explanation: c.explanation,
-        options: c.options,
-        cloze_text: c.cloze_text,
+        options: c.options ? JSON.parse(c.options) : null,
+        clozeText: c.clozeText,
       })),
       exportedAt: new Date().toISOString(),
-      cardCount: cardList.length,
+      cardCount: cards.length,
     };
     return {
       content: JSON.stringify(exportData, null, 2),
@@ -59,7 +43,6 @@ export async function exportDeck(deckId: string, format: "json" | "csv") {
     };
   }
 
-  // CSV format
   const escapeCSV = (val: string | null) => {
     if (!val) return "";
     if (val.includes(",") || val.includes('"') || val.includes("\n")) {
@@ -69,7 +52,7 @@ export async function exportDeck(deckId: string, format: "json" | "csv") {
   };
 
   const header = "Type,Prompt,Answer";
-  const rows = cardList.map(
+  const rows = cards.map(
     (c) => `${escapeCSV(c.type)},${escapeCSV(c.prompt)},${escapeCSV(c.answer)}`
   );
 

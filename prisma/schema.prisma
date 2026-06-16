@@ -4,52 +4,29 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-}
-
-enum SourceType {
-  TOPIC
-  PDF
-  MANUAL
-}
-
-enum CardType {
-  FLASHCARD
-  MCQ
-  IDENTIFICATION
-  TRUE_FALSE
-  CLOZE
-}
-
-enum StudyMode {
-  LEARN
-  QUIZ
-  TEST
-}
-
-enum ShareType {
-  LINK
-  CODE
+  provider = "sqlite"
 }
 
 model User {
-  id              String    @id @default(uuid()) @db.Uuid
-  email           String    @unique
-  displayName     String?   @map("display_name")
-  avatarUrl       String?   @map("avatar_url")
-  preferences     Json      @default("{}")
-  streakCount     Int       @default(0) @map("streak_count")
-  weeklyGoal      Int       @default(5) @map("weekly_goal")
-  streakUpdatedAt      DateTime? @map("streak_updated_at")
-  streakFreezeAvailable Boolean  @default(true) @map("streak_freeze_available")
-  streakFreezeUsedAt   DateTime? @map("streak_freeze_used_at")
-  createdAt            DateTime  @default(now()) @map("created_at")
+  id                    String    @id @default(uuid())
+  email                 String    @unique
+  password              String?
+  displayName           String?   @map("display_name")
+  avatarUrl             String?   @map("avatar_url")
+  preferences           String    @default("{}") @map("preferences")
+  streakCount           Int       @default(0) @map("streak_count")
+  weeklyGoal            Int       @default(5) @map("weekly_goal")
+  streakUpdatedAt       DateTime? @map("streak_updated_at")
+  streakFreezeAvailable Boolean   @default(true) @map("streak_freeze_available")
+  streakFreezeUsedAt    DateTime? @map("streak_freeze_used_at")
+  createdAt             DateTime  @default(now()) @map("created_at")
 
-  aiProvider    String? @map("ai_provider")
-  aiApiKey      String? @map("ai_api_key")
-  aiBaseUrl     String? @map("ai_base_url")
-  aiModelName   String? @map("ai_model_name")
+  aiProvider  String? @map("ai_provider")
+  aiApiKey    String? @map("ai_api_key")
+  aiBaseUrl   String? @map("ai_base_url")
+  aiModelName String? @map("ai_model_name")
 
+  sessions        Session[]
   decks           Deck[]
   studySessions   StudySession[]
   reviewSchedules ReviewSchedule[]
@@ -58,17 +35,31 @@ model User {
   @@map("users")
 }
 
+model Session {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  token     String   @unique
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([token])
+  @@index([userId])
+  @@map("sessions")
+}
+
 model Deck {
-  id          String     @id @default(uuid()) @db.Uuid
-  ownerId     String     @map("owner_id") @db.Uuid
+  id          String   @id @default(uuid())
+  ownerId     String   @map("owner_id")
   title       String
   subject     String
   description String?
-  sourceType  SourceType @map("source_type")
-  cardCount   Int        @default(0) @map("card_count")
-  isShared    Boolean    @default(false) @map("is_shared")
-  createdAt   DateTime   @default(now()) @map("created_at")
-  updatedAt   DateTime   @updatedAt @map("updated_at")
+  sourceType  String   @map("source_type")
+  cardCount   Int      @default(0) @map("card_count")
+  isShared    Boolean  @default(false) @map("is_shared")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   owner           User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
   cards           Card[]
@@ -81,13 +72,13 @@ model Deck {
 }
 
 model Card {
-  id            String   @id @default(uuid()) @db.Uuid
-  deckId        String   @map("deck_id") @db.Uuid
-  type          CardType
+  id            String   @id @default(uuid())
+  deckId        String   @map("deck_id")
+  type          String
   prompt        String
   answer        String
   explanation   String?
-  options       Json?
+  options       String?
   clozeText     String?  @map("cloze_text")
   sourceChunkId String?  @map("source_chunk_id")
   position      Int      @default(0)
@@ -103,13 +94,13 @@ model Card {
 }
 
 model SourceDocument {
-  id            String   @id @default(uuid()) @db.Uuid
-  deckId        String   @map("deck_id") @db.Uuid
+  id            String   @id @default(uuid())
+  deckId        String   @map("deck_id")
   filename      String
   mimeType      String   @map("mime_type")
   storagePath   String   @map("storage_path")
-  extractedText String   @map("extracted_text") @db.Text
-  chunks        Json
+  extractedText String   @map("extracted_text")
+  chunks        String
   uploadedAt    DateTime @default(now()) @map("uploaded_at")
 
   deck Deck @relation(fields: [deckId], references: [id], onDelete: Cascade)
@@ -119,10 +110,10 @@ model SourceDocument {
 }
 
 model StudySession {
-  id              String    @id @default(uuid()) @db.Uuid
-  userId          String    @map("user_id") @db.Uuid
-  deckId          String    @map("deck_id") @db.Uuid
-  mode            StudyMode
+  id              String    @id @default(uuid())
+  userId          String    @map("user_id")
+  deckId          String    @map("deck_id")
+  mode            String
   totalCards      Int       @map("total_cards")
   correctCount    Int       @default(0) @map("correct_count")
   durationSeconds Int       @default(0) @map("duration_seconds")
@@ -139,9 +130,9 @@ model StudySession {
 }
 
 model SessionAnswer {
-  id             String   @id @default(uuid()) @db.Uuid
-  sessionId      String   @map("session_id") @db.Uuid
-  cardId         String   @map("card_id") @db.Uuid
+  id             String   @id @default(uuid())
+  sessionId      String   @map("session_id")
+  cardId         String   @map("card_id")
   isCorrect      Boolean  @map("is_correct")
   confidence     Int?
   responseTimeMs Int?     @map("response_time_ms")
@@ -156,9 +147,9 @@ model SessionAnswer {
 }
 
 model ReviewSchedule {
-  id             String    @id @default(uuid()) @db.Uuid
-  userId         String    @map("user_id") @db.Uuid
-  cardId         String    @map("card_id") @db.Uuid
+  id             String    @id @default(uuid())
+  userId         String    @map("user_id")
+  cardId         String    @map("card_id")
   easeFactor     Float     @default(2.5) @map("ease_factor")
   intervalDays   Int       @default(0) @map("interval_days")
   repetitions    Int       @default(0)
@@ -174,10 +165,10 @@ model ReviewSchedule {
 }
 
 model ShareArtifact {
-  id          String    @id @default(uuid()) @db.Uuid
-  deckId      String    @map("deck_id") @db.Uuid
-  creatorId   String    @map("creator_id") @db.Uuid
-  shareType   ShareType @map("share_type")
+  id          String    @id @default(uuid())
+  deckId      String    @map("deck_id")
+  creatorId   String    @map("creator_id")
+  shareType   String    @map("share_type")
   code        String    @unique
   importCount Int       @default(0) @map("import_count")
   expiresAt   DateTime? @map("expires_at")
