@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
-import { createAIClient, getAIModel, fetchUserAIConfig } from "@/lib/openrouter";
-import { NextRequest } from "next/server";
+import { createAIClient, getAIModel, fetchUserAIConfig, isAIConfigured } from "@/lib/openrouter";
+import { NextRequest, NextResponse } from "next/server";
 
 export async function POST(req: NextRequest) {
   const supabase = await createClient();
@@ -70,6 +70,12 @@ ${cardContext ? `\nThe student is currently looking at: ${cardContext}` : ""}`;
 
   try {
     const aiConfig = await fetchUserAIConfig(supabase, user.id);
+    if (!isAIConfigured(aiConfig)) {
+      return NextResponse.json(
+        { error: "AI service not configured. Set OPENROUTER_API_KEY in your environment or configure a custom AI provider in Settings." },
+        { status: 503 }
+      );
+    }
     const client = createAIClient(aiConfig);
     const model = getAIModel(aiConfig);
 

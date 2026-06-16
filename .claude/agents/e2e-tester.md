@@ -3,6 +3,7 @@ name: e2e-tester
 model: sonnet
 description: Run E2E behavioral verification using Playwright CLI or agent-browser. Fix failures and auto-commit.
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep
+memory: project
 ---
 
 # E2E Tester Agent

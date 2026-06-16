@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { createDeck, deleteDeck } from "@/actions/decks";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { GenerationLoading } from "@/components/generation-loading";
+import { AIUnavailableNotice } from "@/components/ai-unavailable-notice";
 
 type Mode = "choose" | "topic" | "pdf" | "manual";
 
@@ -256,8 +257,13 @@ export default function NewDeckPage() {
               if (event.error) {
                 streamError = event.error;
               }
+              // Accumulate per-chunk counts so partial progress survives
+              // even if the function terminates before emitting `done`.
+              if (typeof event.cardsCreated === "number") {
+                totalCards += event.cardsCreated;
+              }
               if (event.done && event.totalCards != null) {
-                totalCards = event.totalCards;
+                totalCards = event.totalCards; // authoritative final count
               }
             } catch {
               // skip malformed NDJSON lines
@@ -385,6 +391,8 @@ export default function NewDeckPage() {
           {mode === "manual" && "Build Manually"}
         </h1>
       </div>
+
+      {(mode === "topic" || mode === "pdf") && <AIUnavailableNotice />}
 
       {error && (
         <div className="p-3 rounded-lg bg-destructive/10 border border-destructive/30 text-sm text-destructive">

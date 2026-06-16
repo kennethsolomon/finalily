@@ -42,6 +42,11 @@ export async function fetchUserAIConfig(
   return data;
 }
 
+export function isAIConfigured(config?: UserAIConfig | null): boolean {
+  if (config?.ai_provider === "custom" && config.ai_api_key) return true;
+  return !!process.env.OPENROUTER_API_KEY;
+}
+
 export function maskApiKey(key: string | null): string | null {
   if (!key) return null;
   if (key.length <= 8) return "••••••••";

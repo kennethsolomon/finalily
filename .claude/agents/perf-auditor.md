@@ -3,6 +3,7 @@ name: perf-auditor
 model: sonnet
 description: Audit changed code for performance issues including bundle size, N+1 queries, Core Web Vitals, and memory leaks.
 allowed-tools: Bash, Read, Edit, Write, Glob, Grep
+memory: project
 ---
 
 # Performance Auditor Agent

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createAIClient, getAIModel, fetchUserAIConfig } from "@/lib/openrouter";
+import { createAIClient, getAIModel, fetchUserAIConfig, isAIConfigured } from "@/lib/openrouter";
 type CardType = "FLASHCARD" | "MCQ" | "IDENTIFICATION" | "TRUE_FALSE" | "CLOZE";
 
 const TYPE_DESCRIPTIONS: Record<string, string> = {
@@ -85,6 +85,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const aiConfig = await fetchUserAIConfig(supabase, user.id);
+    if (!isAIConfigured(aiConfig)) {
+      return NextResponse.json(
+        { error: "AI service not configured. Set OPENROUTER_API_KEY in your environment or configure a custom AI provider in Settings." },
+        { status: 503 }
+      );
+    }
     const client = createAIClient(aiConfig);
     const model = getAIModel(aiConfig);
 

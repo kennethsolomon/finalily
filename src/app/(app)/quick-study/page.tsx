@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { Timer, ChevronLeft, Zap, Shuffle } from "lucide-react";
 import { buttonVariants } from "@/components/ui/button";
+import Link from "next/link";
 
 interface Card {
   id: string;
@@ -184,7 +185,7 @@ export default function QuickStudyPage() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-4">
         <p className="text-muted-foreground">No cards due for review.</p>
-        <a href="/" className={cn(buttonVariants({ variant: "outline" }))}>Back to Dashboard</a>
+        <Link href="/" className={cn(buttonVariants({ variant: "outline" }))}>Back to Dashboard</Link>
       </div>
     );
   }
@@ -203,10 +204,10 @@ export default function QuickStudyPage() {
     <div className="flex flex-col gap-4 max-w-2xl mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <a href="/" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
+        <Link href="/" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>
           <ChevronLeft className="size-4 mr-1" />
           Exit
-        </a>
+        </Link>
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           {studyMode === "all" ? (
             <Shuffle className="size-4" />

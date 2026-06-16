@@ -1,5 +1,6 @@
 /// <reference lib="webworker" />
 import { defaultCache } from "@serwist/next/worker";
+import { NetworkFirst, StaleWhileRevalidate } from "serwist";
 import type { PrecacheEntry, SerwistGlobalConfig } from "serwist";
 import { Serwist } from "serwist";
 
@@ -16,7 +17,25 @@ const serwist = new Serwist({
   skipWaiting: true,
   clientsClaim: true,
   navigationPreload: true,
-  runtimeCaching: defaultCache,
+  runtimeCaching: [
+    // Cache HTML pages with network-first; serve stale page if offline within 3s timeout
+    {
+      matcher: ({ request }) => request.mode === "navigate",
+      handler: new NetworkFirst({
+        cacheName: "pages-cache",
+        networkTimeoutSeconds: 3,
+      }),
+    },
+    // Cache GET API responses (e.g. draft-cards) with stale-while-revalidate
+    {
+      matcher: ({ url, request }) =>
+        url.pathname.startsWith("/api/") && request.method === "GET",
+      handler: new StaleWhileRevalidate({
+        cacheName: "api-get-cache",
+      }),
+    },
+    ...defaultCache,
+  ],
 });
 
 // Handle push notifications

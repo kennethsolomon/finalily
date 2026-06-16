@@ -1,6 +1,6 @@
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createAIClient, getAIModel, fetchUserAIConfig } from "@/lib/openrouter";
+import { createAIClient, getAIModel, fetchUserAIConfig, isAIConfigured } from "@/lib/openrouter";
 
 // Polyfill browser APIs required by pdfjs-dist (used internally by pdf-parse).
 // Only text extraction is needed, not rendering, so minimal stubs suffice.
@@ -41,6 +41,7 @@ if (typeof globalThis.Path2D === "undefined") {
 }
 
 export const dynamic = "force-dynamic";
+export const maxDuration = 300;
 
 type PdfResult = { text: string; numpages: number; totalPages: number };
 
@@ -88,6 +89,7 @@ async function parsePdf(
 const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20 MB
 const MAX_PAGES = 300;
 const CHUNK_WORDS = 500;
+const MAX_CHUNKS_PER_REQUEST = 10;
 
 function chunkText(text: string, wordsPerChunk: number): string[] {
   const words = text.split(/\s+/).filter(Boolean);
@@ -96,6 +98,16 @@ function chunkText(text: string, wordsPerChunk: number): string[] {
     chunks.push(words.slice(i, i + wordsPerChunk).join(" "));
   }
   return chunks;
+}
+
+function selectEvenlySpaced<T>(items: T[], maxCount: number): T[] {
+  if (items.length <= maxCount) return items;
+  const step = items.length / maxCount;
+  const selected: T[] = [];
+  for (let i = 0; i < maxCount; i++) {
+    selected.push(items[Math.floor(i * step)]);
+  }
+  return selected;
 }
 
 const MAX_EXTRACTED_TEXT = 500_000; // ~500KB text limit
@@ -236,8 +248,11 @@ export async function POST(req: NextRequest) {
     extractedText = extractedText.slice(0, MAX_EXTRACTED_TEXT);
   }
 
-  // Chunk text
-  const chunks = chunkText(extractedText, CHUNK_WORDS);
+  // Chunk text, then cap the number of chunks we'll actually process so the
+  // function completes within maxDuration. For large PDFs, sample evenly
+  // spaced chunks to preserve coverage across the document.
+  const allChunks = chunkText(extractedText, CHUNK_WORDS);
+  const chunks = selectEvenlySpaced(allChunks, MAX_CHUNKS_PER_REQUEST);
 
   // Create SourceDocument
   const { data: sourceDoc, error: sourceDocError } = await supabase
@@ -262,10 +277,16 @@ export async function POST(req: NextRequest) {
 
   // Stream NDJSON response
   const encoder = new TextEncoder();
-  const CHUNK_DELAY_MS = 1000; // 1s between chunks to avoid rate limits
+  const CHUNK_DELAY_MS = 500; // delay between chunks to avoid rate limits
   const MAX_RETRIES = 3;
 
   const aiConfig = await fetchUserAIConfig(supabase, user.id);
+  if (!isAIConfigured(aiConfig)) {
+    return NextResponse.json(
+      { error: "AI service not configured. Set OPENROUTER_API_KEY in your environment or configure a custom AI provider in Settings." },
+      { status: 503 }
+    );
+  }
   const client = createAIClient(aiConfig);
   const model = getAIModel(aiConfig);
 

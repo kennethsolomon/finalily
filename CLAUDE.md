@@ -234,3 +234,8 @@ Create entries in: `.claude/docs/architectural_change_log/`
 | `/sk:team` | Parallel domain agents for full-stack implementation |
 | `/sk:update-task` | Mark task done in todo.md + log to progress.md |
 | `/sk:status` | Show workflow + task status |
+| `/sk:investigate` | Deep investigation of a bug, behavior, or system |
+| `/sk:respond-review` | Respond to PR review comments |
+| `/sk:failure-map` | Map out failure modes before implementation |
+| `/sk:ci` | CI/CD pipeline setup and configuration |
+| `/sk:plugin` | Plugin development and management |

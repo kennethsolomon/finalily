@@ -52,9 +52,9 @@ export function DecksClientWrapper({
             Showing: <span className="text-primary">{focusLabel}</span>
             {filtered.length === 0 ? " — no matching decks" : ` — ${filtered.length} deck${filtered.length === 1 ? "" : "s"}`}
           </p>
-          <a href="/decks" className="text-xs text-muted-foreground hover:text-foreground underline">
+          <Link href="/decks" className="text-xs text-muted-foreground hover:text-foreground underline">
             Clear filter
-          </a>
+          </Link>
         </div>
       )}
       <div className="flex flex-col sm:flex-row gap-3">

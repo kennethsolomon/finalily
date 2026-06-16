@@ -39,8 +39,8 @@ export default async function DecksPage({
   const allCardIds = deckList.flatMap(
     (d: { cards: { id: string }[] }) => (d.cards ?? []).map((c) => c.id)
   );
-  let reviewScheduleMap: Map<string, { ease_factor: number; card_id: string }[]> = new Map();
-  let dueCountMap: Map<string, number> = new Map();
+  const reviewScheduleMap: Map<string, { ease_factor: number; card_id: string }[]> = new Map();
+  const dueCountMap: Map<string, number> = new Map();
 
   if (allCardIds.length > 0) {
     const now = new Date().toISOString();
@@ -94,6 +94,7 @@ export default async function DecksPage({
       focusDeckIds = new Set();
     }
   } else if (focus === "mistakes") {
+    // eslint-disable-next-line react-hooks/purity
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     const { data: mistakeAnswers } = await supabase
       .from("session_answers")

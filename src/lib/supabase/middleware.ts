@@ -25,9 +25,15 @@ export async function updateSession(request: NextRequest) {
     }
   );
 
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  let user = null;
+  try {
+    const { data } = await supabase.auth.getUser();
+    user = data.user;
+  } catch {
+    // Network unavailable (offline) — fall back to local session cookie, no server validation
+    const { data } = await supabase.auth.getSession();
+    user = data.session?.user ?? null;
+  }
 
   const { pathname } = request.nextUrl;
 
