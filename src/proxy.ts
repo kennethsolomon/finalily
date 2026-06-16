@@ -5,6 +5,7 @@ export function proxy(request: NextRequest) {
 
   const isPublicRoute =
     pathname.startsWith("/auth") ||
+    pathname.startsWith("/api/auth/") ||
     pathname.startsWith("/share") ||
     pathname === "/";
 

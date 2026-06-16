@@ -35,8 +35,7 @@ export default function SignUpPage() {
       return;
     }
 
-    router.push("/onboarding");
-    router.refresh();
+    window.location.href = "/onboarding";
   }
 
   return (

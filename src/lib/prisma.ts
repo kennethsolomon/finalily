@@ -4,8 +4,12 @@ import path from "path";
 
 function createPrismaClient() {
   const dbUrl = process.env.DATABASE_URL ?? "file:./dev.db";
-  const dbPath = dbUrl.startsWith("file:") ? dbUrl.slice(5) : dbUrl;
-  const resolvedPath = path.isAbsolute(dbPath) ? dbPath : path.join(/*turbopackIgnore: true*/ process.cwd(), dbPath);
+  // Only accept file: URLs for SQLite; ignore postgres/supabase URLs
+  const fileUrl = dbUrl.startsWith("file:") ? dbUrl : "file:./dev.db";
+  const dbPath = fileUrl.slice(5); // strip "file:"
+  const resolvedPath = path.isAbsolute(dbPath)
+    ? dbPath
+    : path.join(process.cwd(), dbPath);
   const adapter = new PrismaBetterSqlite3({ url: resolvedPath });
   return new PrismaClient({ adapter }) as unknown as PrismaClient;
 }
