@@ -62,9 +62,9 @@ Finalily is an AI-powered flashcard and spaced-repetition study app built for st
 ### Prerequisites
 
 - Node.js 20+
-- PostgreSQL database (or a Supabase project)
+- A [Supabase](https://supabase.com) project (free tier works)
 
-### Installation
+### 1. Clone and install
 
 ```bash
 git clone https://github.com/kennethsolomon/finalily.git
@@ -72,34 +72,67 @@ cd finalily
 npm install
 ```
 
-### Environment
-
-Copy `.env.example` to `.env.local` and fill in the required values:
+### 2. Set up environment variables
 
 ```bash
-cp .env.example .env.local
+cp .env.local.example .env.local
 ```
 
-| Variable | Description |
-|----------|-------------|
-| `DATABASE_URL` | PostgreSQL connection string |
-| `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Supabase anon key |
-| `OPENROUTER_API_KEY` | OpenRouter API key for AI generation |
+Open `.env.local` and fill in your values:
 
-### Database
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Your Supabase project URL |
+| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Your Supabase anon key |
+| `DATABASE_URL` | Yes | PostgreSQL pooler connection string |
+| `DIRECT_URL` | Yes | PostgreSQL direct connection string |
+| `OPENROUTER_API_KEY` | **No** | AI card generation (see note below) |
+
+> **OpenRouter API key is optional.** Without it, all features work except AI card generation (From Topic, Upload PDF). You can still create decks manually, study, use spaced repetition, export, and share. You can also add your own API key later in **Settings → AI Configuration** without touching `.env.local`.
+>
+> Get a free key at [openrouter.ai](https://openrouter.ai) if you want AI generation.
+
+Get your Supabase credentials from: **Supabase dashboard → Project Settings → API**
+
+### 3. Set up the database
 
 ```bash
 npx prisma migrate dev
 ```
 
-### Development
+### 4. Run the app
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Open [http://localhost:3000](http://localhost:3000) — sign up and start studying.
+
+---
+
+## Offline Mode
+
+Finalily is a PWA and works offline after the first visit. Here's what that means in practice:
+
+**Works offline:**
+- Viewing decks and cards (cached after first load)
+- Studying with spaced repetition
+- Your session stays logged in — no redirect to login
+
+**Requires internet:**
+- AI card generation (From Topic, Upload PDF)
+- Syncing new data with the database
+
+**How to enable offline caching** (requires a production build — the dev server does not cache):
+
+```bash
+npm run build
+npm start        # visit http://localhost:3000
+```
+
+After visiting the app once, the service worker caches pages. You can then go offline in your browser's DevTools (Network → Offline) and navigate around normally.
+
+The app shows a yellow banner when you're offline and a notice on AI generation pages explaining that those features need a connection.
 
 ---
 
