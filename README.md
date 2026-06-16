@@ -84,8 +84,7 @@ Open `.env.local` and fill in your values:
 |----------|----------|-------------|
 | `NEXT_PUBLIC_SUPABASE_URL` | Yes | Your Supabase project URL |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Yes | Your Supabase anon key |
-| `DATABASE_URL` | Yes | PostgreSQL pooler connection string |
-| `DIRECT_URL` | Yes | PostgreSQL direct connection string |
+| `DATABASE_URL` | Yes | PostgreSQL connection string (from Supabase) |
 | `OPENROUTER_API_KEY` | **No** | AI card generation (see note below) |
 
 > **OpenRouter API key is optional.** Without it, all features work except AI card generation (From Topic, Upload PDF). You can still create decks manually, study, use spaced repetition, export, and share. You can also add your own API key later in **Settings → AI Configuration** without touching `.env.local`.
