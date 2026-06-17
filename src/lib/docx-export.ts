@@ -115,7 +115,7 @@ function buildCardParagraphs(card: ExportCard, index: number): Paragraph[] {
 
   // MCQ options
   if (card.type === "MCQ" && card.options) {
-    const options = Array.isArray(card.options) ? card.options : [];
+    const options: string[] = Array.isArray(card.options) ? card.options as string[] : typeof card.options === "string" ? (() => { try { return JSON.parse(card.options); } catch { return []; } })() : [];
     const letters = ["A", "B", "C", "D", "E", "F"];
     for (let i = 0; i < options.length; i++) {
       const prefix = letters[i] ?? String(i + 1);

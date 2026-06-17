@@ -20,9 +20,13 @@ interface CardStudyProps {
 export function MCQStudy({ card, onAnswer, showResult }: CardStudyProps) {
   const [selected, setSelected] = useState<string | null>(null);
 
-  const options = Array.isArray(card.options)
-    ? (card.options as string[])
-    : [];
+  const options: string[] = (() => {
+    if (Array.isArray(card.options)) return card.options as string[];
+    if (typeof card.options === "string") {
+      try { return JSON.parse(card.options); } catch { return []; }
+    }
+    return [];
+  })();
 
   function handleSelect(option: string) {
     if (selected !== null) return;

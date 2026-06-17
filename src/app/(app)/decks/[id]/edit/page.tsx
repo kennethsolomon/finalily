@@ -460,8 +460,9 @@ export default function EditDeckPage() {
     setEditPrompt(card.type === "CLOZE" && card.clozeText ? card.clozeText : card.prompt);
     setEditAnswer(card.answer);
     setEditExplanation(card.explanation ?? "");
-    if (card.type === "MCQ" && Array.isArray(card.options)) {
-      setEditOptions([...(card.options as string[])]);
+    if (card.type === "MCQ") {
+      const parsed = Array.isArray(card.options) ? card.options as string[] : typeof card.options === "string" ? (() => { try { return JSON.parse(card.options as string); } catch { return []; } })() : [];
+      setEditOptions([...parsed]);
     } else {
       setEditOptions(["", "", "", ""]);
     }
