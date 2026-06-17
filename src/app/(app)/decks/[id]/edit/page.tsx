@@ -85,8 +85,8 @@ type CardRow = {
   answer: string;
   explanation: string | null;
   options: unknown;
-  cloze_text: string | null;
-  is_draft: boolean;
+  clozeText: string | null;
+  isDraft: boolean;
   position: number;
 };
 
@@ -155,7 +155,7 @@ function SortableCardItem({
       style={style}
       className={cn(
         "rounded-lg border bg-card p-4",
-        card.is_draft && "border-dashed border-amber-300 bg-amber-50/40",
+        card.isDraft && "border-dashed border-amber-300 bg-amber-50/40",
         isDragging && "opacity-50 shadow-lg"
       )}
     >
@@ -334,7 +334,7 @@ function SortableCardItem({
             </p>
           </div>
           <div className="flex items-center gap-1 shrink-0">
-            {card.is_draft && (
+            {card.isDraft && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -364,13 +364,13 @@ function SortableCardItem({
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
             <Badge
-              variant={card.is_draft ? "outline" : "secondary"}
+              variant={card.isDraft ? "outline" : "secondary"}
               className={cn(
                 "text-xs ml-1",
-                card.is_draft && "border-amber-400 text-amber-700"
+                card.isDraft && "border-amber-400 text-amber-700"
               )}
             >
-              {card.is_draft ? "Draft" : "Published"}
+              {card.isDraft ? "Draft" : "Published"}
             </Badge>
           </div>
         </div>
@@ -457,7 +457,7 @@ export default function EditDeckPage() {
 
   function startEditCard(card: CardRow) {
     setEditingCardId(card.id);
-    setEditPrompt(card.type === "CLOZE" && card.cloze_text ? card.cloze_text : card.prompt);
+    setEditPrompt(card.type === "CLOZE" && card.clozeText ? card.clozeText : card.prompt);
     setEditAnswer(card.answer);
     setEditExplanation(card.explanation ?? "");
     if (card.type === "MCQ" && Array.isArray(card.options)) {

@@ -82,7 +82,7 @@ model Card {
   clozeText     String?  @map("cloze_text")
   sourceChunkId String?  @map("source_chunk_id")
   position      Int      @default(0)
-  isDraft       Boolean  @default(true) @map("is_draft")
+  isDraft       Boolean  @default(false) @map("is_draft")
   createdAt     DateTime @default(now()) @map("created_at")
 
   deck            Deck             @relation(fields: [deckId], references: [id], onDelete: Cascade)

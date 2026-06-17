@@ -12,6 +12,7 @@ export async function createCard(data: {
   explanation?: string;
   options?: unknown;
   clozeText?: string;
+  isDraft?: boolean;
 }) {
   const validTypes = ["FLASHCARD", "MCQ", "IDENTIFICATION", "TRUE_FALSE", "CLOZE"];
   if (!validTypes.includes(data.type)) throw new Error("Invalid card type");
@@ -46,7 +47,7 @@ export async function createCard(data: {
       options: data.options !== undefined ? JSON.stringify(data.options) : null,
       clozeText: data.clozeText ?? null,
       position,
-      isDraft: true,
+      isDraft: data.isDraft ?? false,
     },
   });
 
