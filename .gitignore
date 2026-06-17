@@ -50,9 +50,9 @@ next-env.d.ts
 
 /src/generated/prisma
 
-# SQLite database files — exclude all except the seeded dev.db
+# SQLite database files — personal DBs are local only; dev.db.example is the seed template
 *.db
-!dev.db
+!dev.db.example
 *.db-journal
 *.db-shm
 *.db-wal

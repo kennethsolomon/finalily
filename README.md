@@ -43,7 +43,7 @@ FinaLily is an AI-powered flashcard and spaced-repetition study app. Generate de
 
 ---
 
-## Quick Start (3 steps)
+## Quick Start (4 steps)
 
 ```bash
 # 1. Clone and install
@@ -51,10 +51,14 @@ git clone https://github.com/kennethsolomon/finalily.git
 cd finalily
 npm install
 
-# 2. Set up environment
-cp .env.local.example .env.local
+# 2. Copy the seed database to your personal copy
+cp dev.db.example dev.db
 
-# 3. Run
+# 3. Set up environment
+cp .env.local.example .env.local
+# Edit .env.local — update LM_STUDIO_BASE_URL if your server IP differs
+
+# 4. Run
 npm run dev
 ```
 
@@ -62,7 +66,7 @@ Open [http://localhost:3000](http://localhost:3000) — the app is ready with a 
 
 > **Demo account:** `demo@finalily.app` / `demo123`
 
-The repo includes a pre-seeded `dev.db` so no database setup is required.
+`dev.db.example` is the seed template committed to the repo. Your personal `dev.db` is gitignored so your data never gets committed.
 
 ---
 
@@ -106,15 +110,33 @@ Open [http://localhost:3000](http://localhost:3000).
 
 ## Database
 
-The repository includes a ready-to-use `dev.db` (SQLite) with seed data. **No migration commands are needed on a fresh clone.**
+The repo ships `dev.db.example` — a clean SQLite database with seed data. Your personal `dev.db` is gitignored so your notes, decks, and study progress stay local.
 
-If you want to reset the database to a clean state:
+**First-time setup:**
 
 ```bash
-# Reset and re-seed (wipes all data)
+cp dev.db.example dev.db
+```
+
+**Reset to clean state (wipes your data):**
+
+```bash
+rm dev.db
+cp dev.db.example dev.db
+```
+
+**Or rebuild from scratch:**
+
+```bash
 rm dev.db
 DATABASE_URL="file:./dev.db" npx prisma migrate deploy
 DATABASE_URL="file:./dev.db" npm run seed
+```
+
+**Using a different filename?** Update `DATABASE_URL` in `.env.local`:
+
+```env
+DATABASE_URL="file:./my-study-data.db"
 ```
 
 **Seed data includes:**
@@ -215,9 +237,15 @@ cd finalily
 # Install
 npm install
 
+# Copy seed database to your personal copy
+cp dev.db.example dev.db
+
 # Environment
 cp .env.local.example .env.local
-# Edit .env.local — set LM_STUDIO_BASE_URL to your LM Studio server IP if different
+# Edit .env.local:
+#   - Set LM_STUDIO_BASE_URL to your LM Studio server IP (or localhost:1234/v1)
+#   - Or set OPENROUTER_API_KEY for cloud AI
+#   - DATABASE_URL defaults to file:./dev.db — change if you rename the file
 
 # Run
 npm run dev
