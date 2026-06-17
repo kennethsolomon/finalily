@@ -50,8 +50,10 @@ next-env.d.ts
 
 /src/generated/prisma
 
-# SQLite database files
+# SQLite database files — exclude all except the seeded dev.db
 *.db
+!dev.db
 *.db-journal
 *.db-shm
 *.db-wal
+*.db-backup
