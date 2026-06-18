@@ -1,0 +1,29 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e3]:
+    - generic [ref=e4]:
+      - img "FinaLily" [ref=e6]
+      - generic [ref=e7]: Create your account
+      - generic [ref=e8]: Start studying smarter with FinaLily
+    - generic [ref=e9]:
+      - generic [ref=e10]:
+        - generic [ref=e11]:
+          - generic [ref=e12]: Display Name
+          - textbox "Display Name" [ref=e13]:
+            - /placeholder: Your name
+        - generic [ref=e14]:
+          - generic [ref=e15]: Email
+          - textbox "Email" [ref=e16]:
+            - /placeholder: you@example.com
+        - generic [ref=e17]:
+          - generic [ref=e18]: Password
+          - textbox "Password" [ref=e19]:
+            - /placeholder: At least 6 characters
+        - button "Create account" [ref=e20]
+      - paragraph [ref=e21]:
+        - text: Already have an account?
+        - link "Sign in" [ref=e22] [cursor=pointer]:
+          - /url: /auth/login
+  - region "Notifications alt+T"
+  - button "Open Next.js Dev Tools" [ref=e28] [cursor=pointer]:
+    - img [ref=e29]
+  - alert [ref=e32]
